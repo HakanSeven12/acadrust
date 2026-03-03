@@ -852,13 +852,13 @@ fn write_header_fields(w: &mut SectionWriter, v: DxfVersion, h: &HeaderVariables
 
         w.write_bit_double(h.steps_per_second);
         w.write_bit_double(h.step_size);
-        w.write_bit_double(0.0); // 3DDWFPREC
+        w.write_bit_double(2.0); // 3DDWFPREC — valid range 1..6
         w.write_bit_double(h.lens_length);
         w.write_bit_double(h.camera_height);
         w.write_byte(0); // SOLIDHIST
         w.write_byte(0); // SHOWHIST
-        w.write_bit_double(0.0); // PSOLWIDTH
-        w.write_bit_double(0.0); // PSOLHEIGHT
+        w.write_bit_double(0.25); // PSOLWIDTH — valid range >0
+        w.write_bit_double(0.25); // PSOLHEIGHT
         w.write_bit_double(h.loft_angle1);
         w.write_bit_double(h.loft_angle2);
         w.write_bit_double(h.loft_magnitude1);
@@ -870,7 +870,7 @@ fn write_header_fields(w: &mut SectionWriter, v: DxfVersion, h: &HeaderVariables
         w.write_bit_double(h.north_direction);
         w.write_bit_long(h.timezone);
         w.write_byte(0); // LIGHTGLYPHDISPLAY
-        w.write_byte(b'0'); // TILEMODELIGHTSYNCH — C# writes (byte)'0' = 48
+        w.write_byte(1); // TILEMODELIGHTSYNCH — valid range 0..1
         w.write_byte(0); // DWFFRAME
         w.write_byte(0); // DGNFRAME
 

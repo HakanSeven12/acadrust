@@ -685,8 +685,25 @@ impl<'a> DwgObjectWriter<'a> {
                 // Ctrl tol BD 43
                 self.writer.write_bit_double(1e-10);
 
+                // Generate clamped uniform knot vector if not provided
+                let knots: Vec<f64> = if e.knots.is_empty() && !e.control_points.is_empty() {
+                    let n = e.control_points.len();
+                    let p = e.degree as usize;
+                    let m = n + p + 1;
+                    let mut kv = Vec::with_capacity(m);
+                    for _ in 0..=p { kv.push(0.0); }
+                    let internal = m - 2 * (p + 1);
+                    for i in 1..=internal {
+                        kv.push(i as f64 / (internal + 1) as f64);
+                    }
+                    for _ in 0..=p { kv.push(1.0); }
+                    kv
+                } else {
+                    e.knots.clone()
+                };
+
                 // Numknots BL 72
-                self.writer.write_bit_long(e.knots.len() as i32);
+                self.writer.write_bit_long(knots.len() as i32);
                 // Numctrlpts BL 73
                 self.writer.write_bit_long(e.control_points.len() as i32);
 
@@ -694,7 +711,7 @@ impl<'a> DwgObjectWriter<'a> {
                 self.writer.write_bit(has_weights);
 
                 // Knots
-                for k in &e.knots {
+                for k in &knots {
                     self.writer.write_bit_double(*k);
                 }
 
@@ -1459,18 +1476,18 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertices as child entities
+        // Write vertices as child entities — inherit parent's layer and color
         for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
-            self.write_vertex2d(v, vh, e.common.handle);
+            self.write_vertex2d(v, vh, e.common.handle, &e.common.layer, &e.common.color);
         }
 
-        // Write SEQEND
+        // Write SEQEND — inherit parent's layer and color
         self.write_common_entity_data(
             common::OBJ_SEQEND,
             seqend_handle,
             e.common.handle,
-            &String::new(),
-            &crate::types::Color::ByLayer,
+            &e.common.layer,
+            &e.common.color,
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
@@ -1486,13 +1503,15 @@ impl<'a> DwgObjectWriter<'a> {
         v: &Vertex2D,
         vertex_handle: Handle,
         owner: Handle,
+        parent_layer: &str,
+        parent_color: &crate::types::Color,
     ) {
         self.write_common_entity_data(
             common::OBJ_VERTEX_2D,
             vertex_handle,
             owner,
-            &String::new(),
-            &crate::types::Color::ByLayer,
+            parent_layer,
+            parent_color,
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
@@ -1575,18 +1594,18 @@ impl<'a> DwgObjectWriter<'a> {
 
         self.register_object(e.common.handle);
 
-        // Write vertices
+        // Write vertices — inherit parent's layer and color
         for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
-            self.write_vertex3d(v, vh, e.common.handle);
+            self.write_vertex3d(v, vh, e.common.handle, &e.common.layer, &e.common.color);
         }
 
-        // Write SEQEND
+        // Write SEQEND — inherit parent's layer and color
         self.write_common_entity_data(
             common::OBJ_SEQEND,
             seqend_handle,
             e.common.handle,
-            &String::new(),
-            &crate::types::Color::ByLayer,
+            &e.common.layer,
+            &e.common.color,
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
@@ -1602,13 +1621,15 @@ impl<'a> DwgObjectWriter<'a> {
         v: &Vertex3DPolyline,
         vertex_handle: Handle,
         owner: Handle,
+        parent_layer: &str,
+        parent_color: &crate::types::Color,
     ) {
         self.write_common_entity_data(
             common::OBJ_VERTEX_3D,
             vertex_handle,
             owner,
-            &String::new(),
-            &crate::types::Color::ByLayer,
+            parent_layer,
+            parent_color,
             &crate::types::LineWeight::ByLayer,
             &crate::types::Transparency::default(),
             false,
@@ -1633,6 +1654,15 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer
             .write_bit_short(e.faces.len() as i16);
 
+        // Allocate handles for vertices and faces that don't have one
+        let vertex_handles: Vec<Handle> = e.vertices.iter().map(|v| {
+            if v.common.handle.is_null() { self.alloc_handle() } else { v.common.handle }
+        }).collect();
+        let face_handles: Vec<Handle> = e.faces.iter().map(|f| {
+            if f.common.handle.is_null() { self.alloc_handle() } else { f.common.handle }
+        }).collect();
+        let seqend_handle = self.alloc_handle();
+
         let total_owned = e.vertices.len() + e.faces.len();
 
         if self.version.r2004_plus() {
@@ -1641,39 +1671,92 @@ impl<'a> DwgObjectWriter<'a> {
 
         if self.version.r13_15_only() {
             // First / last child
-            let first = e
-                .vertices
-                .first()
-                .map(|v| v.common.handle)
-                .or_else(|| e.faces.first().map(|f| f.common.handle))
+            let first = vertex_handles.first()
+                .or_else(|| face_handles.first())
+                .copied()
                 .unwrap_or(Handle::NULL);
-            let last = e
-                .faces
-                .last()
-                .map(|f| f.common.handle)
-                .or_else(|| e.vertices.last().map(|v| v.common.handle))
+            let last = face_handles.last()
+                .or_else(|| vertex_handles.last())
+                .copied()
                 .unwrap_or(Handle::NULL);
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, first.value());
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, last.value());
         } else if self.version.r2004_plus() {
-            for v in &e.vertices {
+            for &vh in &vertex_handles {
                 self.writer
-                    .write_handle(DwgReferenceType::SoftPointer, v.common.handle.value());
+                    .write_handle(DwgReferenceType::HardOwnership, vh.value());
             }
-            for f in &e.faces {
+            for &fh in &face_handles {
                 self.writer
-                    .write_handle(DwgReferenceType::SoftPointer, f.common.handle.value());
+                    .write_handle(DwgReferenceType::HardOwnership, fh.value());
             }
         }
 
         // Seqend
-        let se = e.seqend_handle.unwrap_or(Handle::NULL);
         self.writer
-            .write_handle(DwgReferenceType::SoftPointer, se.value());
+            .write_handle(DwgReferenceType::HardOwnership, seqend_handle.value());
 
         self.register_object(e.common.handle);
+
+        // Write vertex child entities (OBJ_VERTEX_PFACE = 13)
+        for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
+            self.write_common_entity_data(
+                common::OBJ_VERTEX_PFACE,
+                vh,
+                e.common.handle,
+                &e.common.layer,
+                &e.common.color,
+                &crate::types::LineWeight::ByLayer,
+                &crate::types::Transparency::default(),
+                false,
+                &crate::xdata::ExtendedData::default(),
+                &[],
+                &None,
+            );
+            self.writer.write_byte(v.flags.bits() as u8);
+            self.writer.write_3bit_double(v.location);
+            self.register_object(vh);
+        }
+
+        // Write face child entities (OBJ_VERTEX_PFACE_FACE = 14)
+        for (f, &fh) in e.faces.iter().zip(face_handles.iter()) {
+            self.write_common_entity_data(
+                common::OBJ_VERTEX_PFACE_FACE,
+                fh,
+                e.common.handle,
+                &e.common.layer,
+                &e.common.color,
+                &crate::types::LineWeight::ByLayer,
+                &crate::types::Transparency::default(),
+                false,
+                &crate::xdata::ExtendedData::default(),
+                &[],
+                &None,
+            );
+            self.writer.write_bit_short(f.index1);
+            self.writer.write_bit_short(f.index2);
+            self.writer.write_bit_short(f.index3);
+            self.writer.write_bit_short(f.index4);
+            self.register_object(fh);
+        }
+
+        // Write SEQEND — inherit parent's layer and color
+        self.write_common_entity_data(
+            common::OBJ_SEQEND,
+            seqend_handle,
+            e.common.handle,
+            &e.common.layer,
+            &e.common.color,
+            &crate::types::LineWeight::ByLayer,
+            &crate::types::Transparency::default(),
+            false,
+            &crate::xdata::ExtendedData::default(),
+            &[],
+            &None,
+        );
+        self.register_object(seqend_handle);
     }
 
     // ── PolygonMesh ─────────────────────────────────────────────────
@@ -1688,38 +1771,72 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit_short(e.m_smooth_density);
         self.writer.write_bit_short(e.n_smooth_density);
 
+        // Allocate handles for vertices that don't have one
+        let vertex_handles: Vec<Handle> = e.vertices.iter().map(|v| {
+            if v.common.handle.is_null() { self.alloc_handle() } else { v.common.handle }
+        }).collect();
+        let seqend_handle = self.alloc_handle();
+
         if self.version.r2004_plus() {
             self.writer
                 .write_bit_long(e.vertices.len() as i32);
         }
 
         if self.version.r13_15_only() {
-            let first = e
-                .vertices
-                .first()
-                .map(|v| v.common.handle)
-                .unwrap_or(Handle::NULL);
-            let last = e
-                .vertices
-                .last()
-                .map(|v| v.common.handle)
-                .unwrap_or(Handle::NULL);
+            let first = vertex_handles.first().copied().unwrap_or(Handle::NULL);
+            let last = vertex_handles.last().copied().unwrap_or(Handle::NULL);
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, first.value());
             self.writer
                 .write_handle(DwgReferenceType::SoftPointer, last.value());
         } else if self.version.r2004_plus() {
-            for v in &e.vertices {
+            for &vh in &vertex_handles {
                 self.writer
-                    .write_handle(DwgReferenceType::HardOwnership, v.common.handle.value());
+                    .write_handle(DwgReferenceType::HardOwnership, vh.value());
             }
         }
 
         // Seqend
         self.writer
-            .write_handle(DwgReferenceType::HardOwnership, 0);
+            .write_handle(DwgReferenceType::HardOwnership, seqend_handle.value());
 
         self.register_object(e.common.handle);
+
+        // Write vertex child entities (OBJ_VERTEX_MESH = 12)
+        for (v, &vh) in e.vertices.iter().zip(vertex_handles.iter()) {
+            self.write_common_entity_data(
+                common::OBJ_VERTEX_MESH,
+                vh,
+                e.common.handle,
+                &e.common.layer,
+                &e.common.color,
+                &crate::types::LineWeight::ByLayer,
+                &crate::types::Transparency::default(),
+                false,
+                &crate::xdata::ExtendedData::default(),
+                &[],
+                &None,
+            );
+            self.writer.write_byte(v.flags as u8);
+            self.writer.write_3bit_double(v.location);
+            self.register_object(vh);
+        }
+
+        // Write SEQEND — inherit parent's layer and color
+        self.write_common_entity_data(
+            common::OBJ_SEQEND,
+            seqend_handle,
+            e.common.handle,
+            &e.common.layer,
+            &e.common.color,
+            &crate::types::LineWeight::ByLayer,
+            &crate::types::Transparency::default(),
+            false,
+            &crate::xdata::ExtendedData::default(),
+            &[],
+            &None,
+        );
+        self.register_object(seqend_handle);
     }
 
     // ── Seqend ──────────────────────────────────────────────────────
@@ -1824,8 +1941,10 @@ impl<'a> DwgObjectWriter<'a> {
             }
         }
 
-        // MLine style handle
-        let sh = e.style_handle.unwrap_or(Handle::NULL);
+        // MLine style handle — fall back to document's current MLine style
+        let sh = e.style_handle
+            .filter(|h| !h.is_null())
+            .unwrap_or(self.document.header.current_multiline_style_handle);
         self.writer
             .write_handle(DwgReferenceType::HardPointer, sh.value());
 
