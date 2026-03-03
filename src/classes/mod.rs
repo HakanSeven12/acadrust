@@ -233,7 +233,7 @@ fn default_classes() -> Vec<DxfClass> {
 
     // Object classes (item_class_id = 499)
     for &(dxf, cpp) in &[
-        ("DICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
+        ("ACDBDICTIONARYWDFLT", "AcDbDictionaryWithDefault"),
         ("ACDBPLACEHOLDER", "AcDbPlaceHolder"),
         ("LAYOUT", "AcDbLayout"),
         ("DICTIONARYVAR", "AcDbDictionaryVar"),

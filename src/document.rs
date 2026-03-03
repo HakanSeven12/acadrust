@@ -930,16 +930,33 @@ impl CadDocument {
     /// Initialize default tables with standard entries
     fn initialize_defaults(&mut self) {
         // Allocate table control handles first (these are well-known handles in DWG)
-        self.header.block_control_handle = self.allocate_handle();
-        self.header.layer_control_handle = self.allocate_handle();
-        self.header.style_control_handle = self.allocate_handle();
-        self.header.linetype_control_handle = self.allocate_handle();
-        self.header.view_control_handle = self.allocate_handle();
-        self.header.ucs_control_handle = self.allocate_handle();
-        self.header.vport_control_handle = self.allocate_handle();
-        self.header.appid_control_handle = self.allocate_handle();
-        self.header.dimstyle_control_handle = self.allocate_handle();
-        
+        self.header.block_control_handle = Handle::new(0x01);
+        self.header.layer_control_handle = Handle::new(0x02);
+        self.header.style_control_handle = Handle::new(0x03);
+        self.header.linetype_control_handle = Handle::new(0x05);
+        self.header.view_control_handle = Handle::new(0x06);
+        self.header.ucs_control_handle = Handle::new(0x07);
+        self.header.vport_control_handle = Handle::new(0x08);
+        self.header.appid_control_handle = Handle::new(0x09);
+        self.header.dimstyle_control_handle = Handle::new(0x0A);
+        self.header.vpent_hdr_control_handle = Handle::new(0x0B);
+        self.header.named_objects_dict_handle = Handle::new(0x0C);
+
+        // Assign allocated table control handles TO the Table objects so the
+        // object writer uses the same handles the header section references.
+        // Without this, Table<T>.handle() returns Handle::NULL and every
+        // table control is written with handle 0, not registered in the
+        // handle map, and unreachable by readers → "invalid data" for all objects.
+        self.block_records.set_handle(self.header.block_control_handle);
+        self.layers.set_handle(self.header.layer_control_handle);
+        self.text_styles.set_handle(self.header.style_control_handle);
+        self.line_types.set_handle(self.header.linetype_control_handle);
+        self.views.set_handle(self.header.view_control_handle);
+        self.ucss.set_handle(self.header.ucs_control_handle);
+        self.vports.set_handle(self.header.vport_control_handle);
+        self.app_ids.set_handle(self.header.appid_control_handle);
+        self.dim_styles.set_handle(self.header.dimstyle_control_handle);
+
         // Add standard layer "0"
         let mut layer0 = Layer::layer_0();
         layer0.set_handle(self.allocate_handle());
@@ -988,7 +1005,15 @@ impl CadDocument {
         // Add standard dimension style
         let mut standard_dimstyle = DimStyle::standard();
         standard_dimstyle.set_handle(self.allocate_handle());
+        // DIMTXSTY must reference the Standard text style
+        standard_dimstyle.dimtxsty_handle = self.header.current_text_style_handle;
         self.header.current_dimstyle_handle = standard_dimstyle.handle;
+        // Header dim text style handle must also point to Standard
+        self.header.dim_text_style_handle = self.header.current_text_style_handle;
+        // Dim linetype handles: reference ByBlock linetype for R2007+
+        self.header.dim_linetype_handle = self.header.byblock_linetype_handle;
+        self.header.dim_linetype1_handle = self.header.byblock_linetype_handle;
+        self.header.dim_linetype2_handle = self.header.byblock_linetype_handle;
         self.dim_styles.add(standard_dimstyle).ok();
 
         // Add standard application ID
@@ -1001,19 +1026,222 @@ impl CadDocument {
         active_vport.set_handle(self.allocate_handle());
         self.vports.add(active_vport).ok();
         
-        // Allocate dictionary handles (required for DWG format)
-        self.header.named_objects_dict_handle = self.allocate_handle();
+        // ── Standard dictionary objects (required for DWG format) ────
+        // Allocate handles for core dictionaries
         self.header.acad_group_dict_handle = self.allocate_handle();
         self.header.acad_mlinestyle_dict_handle = self.allocate_handle();
         self.header.acad_layout_dict_handle = self.allocate_handle();
         self.header.acad_plotsettings_dict_handle = self.allocate_handle();
         self.header.acad_plotstylename_dict_handle = self.allocate_handle();
+        // R2004+/R2007+ dictionaries (AutoCAD requires these even if empty)
+        self.header.acad_material_dict_handle = self.allocate_handle();
+        self.header.acad_color_dict_handle = self.allocate_handle();
+        self.header.acad_visualstyle_dict_handle = self.allocate_handle();
+
+        // Allocate handles for objects that live inside dictionaries
+        let mlinestyle_std_handle = self.allocate_handle();
+        let model_layout_handle = self.allocate_handle();
+        let paper_layout_handle = self.allocate_handle();
+        let plotstylename_placeholder_handle = self.allocate_handle();
+
+        // Store the current MLineStyle handle in the header (for CMLSTYLE)
+        self.header.current_multiline_style_handle = mlinestyle_std_handle;
+
+        // Link block records to their layouts
+        if let Some(ms) = self.block_records.get_mut("*Model_Space") {
+            ms.layout = model_layout_handle;
+        }
+        if let Some(ps) = self.block_records.get_mut("*Paper_Space") {
+            ps.layout = paper_layout_handle;
+        }
+
+        // -- Root dictionary (NAMED_OBJECTS_DICTIONARY) --
+        let root_dict_handle = self.header.named_objects_dict_handle;
+        let mut root_dict = crate::objects::Dictionary::new();
+        root_dict.handle = root_dict_handle;
+        root_dict.owner = Handle::NULL; // owned by document
+        root_dict.add_entry("ACAD_GROUP", self.header.acad_group_dict_handle);
+        root_dict.add_entry("ACAD_MLINESTYLE", self.header.acad_mlinestyle_dict_handle);
+        root_dict.add_entry("ACAD_LAYOUT", self.header.acad_layout_dict_handle);
+        root_dict.add_entry("ACAD_PLOTSETTINGS", self.header.acad_plotsettings_dict_handle);
+        root_dict.add_entry("ACAD_PLOTSTYLENAME", self.header.acad_plotstylename_dict_handle);
+        root_dict.add_entry("ACAD_MATERIAL", self.header.acad_material_dict_handle);
+        root_dict.add_entry("ACAD_COLOR", self.header.acad_color_dict_handle);
+        root_dict.add_entry("ACAD_VISUALSTYLE", self.header.acad_visualstyle_dict_handle);
+        self.objects.insert(root_dict_handle, ObjectType::Dictionary(root_dict));
+
+        // -- ACAD_GROUP dictionary (empty) --
+        let mut group_dict = crate::objects::Dictionary::new();
+        group_dict.handle = self.header.acad_group_dict_handle;
+        group_dict.owner = root_dict_handle;
+        self.objects.insert(group_dict.handle, ObjectType::Dictionary(group_dict));
+
+        // -- ACAD_MLINESTYLE dictionary (contains "Standard") --
+        let mut mlinestyle_dict = crate::objects::Dictionary::new();
+        mlinestyle_dict.handle = self.header.acad_mlinestyle_dict_handle;
+        mlinestyle_dict.owner = root_dict_handle;
+        mlinestyle_dict.add_entry("Standard", mlinestyle_std_handle);
+        self.objects.insert(mlinestyle_dict.handle, ObjectType::Dictionary(mlinestyle_dict));
+
+        // -- MLineStyle Standard object --
+        let mut mlinestyle_std = crate::objects::MLineStyle::standard();
+        mlinestyle_std.handle = mlinestyle_std_handle;
+        mlinestyle_std.owner = self.header.acad_mlinestyle_dict_handle;
+        self.objects.insert(mlinestyle_std_handle, ObjectType::MLineStyle(mlinestyle_std));
+
+        // -- ACAD_LAYOUT dictionary (Model + Layout1) --
+        let mut layout_dict = crate::objects::Dictionary::new();
+        layout_dict.handle = self.header.acad_layout_dict_handle;
+        layout_dict.owner = root_dict_handle;
+        layout_dict.add_entry("Model", model_layout_handle);
+        layout_dict.add_entry("Layout1", paper_layout_handle);
+        self.objects.insert(layout_dict.handle, ObjectType::Dictionary(layout_dict));
+
+        // -- Layout: Model --
+        let mut model_layout = crate::objects::Layout::new("Model");
+        model_layout.handle = model_layout_handle;
+        model_layout.owner = self.header.acad_layout_dict_handle;
+        model_layout.tab_order = 0;
+        model_layout.flags = 1; // model space
+        model_layout.block_record = self.header.model_space_block_handle;
+        self.objects.insert(model_layout_handle, ObjectType::Layout(model_layout));
+
+        // -- Layout: Layout1 (paper space) --
+        let mut paper_layout = crate::objects::Layout::new("Layout1");
+        paper_layout.handle = paper_layout_handle;
+        paper_layout.owner = self.header.acad_layout_dict_handle;
+        paper_layout.tab_order = 1;
+        paper_layout.block_record = self.header.paper_space_block_handle;
+        self.objects.insert(paper_layout_handle, ObjectType::Layout(paper_layout));
+
+        // -- ACAD_PLOTSETTINGS dictionary (empty) --
+        let mut plotsettings_dict = crate::objects::Dictionary::new();
+        plotsettings_dict.handle = self.header.acad_plotsettings_dict_handle;
+        plotsettings_dict.owner = root_dict_handle;
+        self.objects.insert(plotsettings_dict.handle, ObjectType::Dictionary(plotsettings_dict));
+
+        // -- ACAD_MATERIAL dictionary (empty, required R2004+) --
+        let mut material_dict = crate::objects::Dictionary::new();
+        material_dict.handle = self.header.acad_material_dict_handle;
+        material_dict.owner = root_dict_handle;
+        self.objects.insert(material_dict.handle, ObjectType::Dictionary(material_dict));
+
+        // -- ACAD_COLOR dictionary (empty, required R2004+) --
+        let mut color_dict = crate::objects::Dictionary::new();
+        color_dict.handle = self.header.acad_color_dict_handle;
+        color_dict.owner = root_dict_handle;
+        self.objects.insert(color_dict.handle, ObjectType::Dictionary(color_dict));
+
+        // -- ACAD_VISUALSTYLE dictionary (empty, required R2007+) --
+        let mut visualstyle_dict = crate::objects::Dictionary::new();
+        visualstyle_dict.handle = self.header.acad_visualstyle_dict_handle;
+        visualstyle_dict.owner = root_dict_handle;
+        self.objects.insert(visualstyle_dict.handle, ObjectType::Dictionary(visualstyle_dict));
+
+        // -- ACAD_PLOTSTYLENAME dictionary (DictionaryWithDefault with PlaceHolder) --
+        let mut plotstyle_dict = crate::objects::DictionaryWithDefault::new();
+        plotstyle_dict.handle = self.header.acad_plotstylename_dict_handle;
+        plotstyle_dict.owner = root_dict_handle;
+        plotstyle_dict.default_handle = plotstylename_placeholder_handle;
+        plotstyle_dict.entries.push(("Normal".to_string(), plotstylename_placeholder_handle));
+        self.objects.insert(plotstyle_dict.handle, ObjectType::DictionaryWithDefault(plotstyle_dict));
+
+        // -- PlaceHolder for ACAD_PLOTSTYLENAME "Normal" --
+        let mut placeholder = crate::objects::PlaceHolder::new();
+        placeholder.handle = plotstylename_placeholder_handle;
+        placeholder.owner = self.header.acad_plotstylename_dict_handle;
+        self.objects.insert(plotstylename_placeholder_handle, ObjectType::PlaceHolder(placeholder));
+
+        // Register standard DXF classes required by the DWG format.
+        // For pre-R2004, "unlisted" object types (LAYOUT, PLOTSETTINGS, etc.)
+        // need a class entry so the writer can emit the class number instead of
+        // the R2004+ fixed type code.
+        use crate::classes::{DxfClass, ProxyFlags};
+        let standard_classes = [
+            DxfClass {
+                dxf_name: "ACDBDICTIONARYWDFLT".to_string(),
+                cpp_class_name: "AcDbDictionaryWithDefault".to_string(),
+                application_name: "ObjectDBX Classes".to_string(),
+                proxy_flags: ProxyFlags::NONE,
+                instance_count: 0,
+                was_zombie: false,
+                is_an_entity: false,
+                class_number: 0, // will be assigned (500+)
+                item_class_id: 0x1F3,
+            },
+            DxfClass {
+                dxf_name: "DICTIONARYVAR".to_string(),
+                cpp_class_name: "AcDbDictionaryVar".to_string(),
+                application_name: "ObjectDBX Classes".to_string(),
+                proxy_flags: ProxyFlags::NONE,
+                instance_count: 0,
+                was_zombie: false,
+                is_an_entity: false,
+                class_number: 0,
+                item_class_id: 0x1F3,
+            },
+            DxfClass {
+                dxf_name: "LAYOUT".to_string(),
+                cpp_class_name: "AcDbLayout".to_string(),
+                application_name: "ObjectDBX Classes".to_string(),
+                proxy_flags: ProxyFlags::NONE,
+                instance_count: 0,
+                was_zombie: false,
+                is_an_entity: false,
+                class_number: 0,
+                item_class_id: 0x1F3,
+            },
+            DxfClass {
+                dxf_name: "ACDBPLACEHOLDER".to_string(),
+                cpp_class_name: "AcDbPlaceHolder".to_string(),
+                application_name: "ObjectDBX Classes".to_string(),
+                proxy_flags: ProxyFlags::NONE,
+                instance_count: 0,
+                was_zombie: false,
+                is_an_entity: false,
+                class_number: 0,
+                item_class_id: 0x1F3,
+            },
+            DxfClass {
+                dxf_name: "PLOTSETTINGS".to_string(),
+                cpp_class_name: "AcDbPlotSettings".to_string(),
+                application_name: "ObjectDBX Classes".to_string(),
+                proxy_flags: ProxyFlags::NONE,
+                instance_count: 0,
+                was_zombie: false,
+                is_an_entity: false,
+                class_number: 0,
+                item_class_id: 0x1F3,
+            },
+            DxfClass {
+                dxf_name: "SCALE".to_string(),
+                cpp_class_name: "AcDbScale".to_string(),
+                application_name: "ObjectDBX Classes".to_string(),
+                proxy_flags: ProxyFlags::NONE,
+                instance_count: 0,
+                was_zombie: false,
+                is_an_entity: false,
+                class_number: 0,
+                item_class_id: 0x1F3,
+            },
+        ];
+        for cls in standard_classes {
+            self.classes.add_or_update(cls);
+        }
+
+        // Register default DXF classes for all entity/object types.
+        // Unlisted types like MESH, MULTILEADER, IMAGE need class entries
+        // so the writer emits the correct 500+ type code instead of a
+        // wrong fixed code.
+        self.classes.update_defaults();
     }
 
     /// Allocate a new unique handle
     pub fn allocate_handle(&mut self) -> Handle {
         let handle = Handle::new(self.next_handle);
         self.next_handle += 1;
+        // Keep HANDSEED in sync — DWG header requires this to be ≥ next_handle
+        self.header.handle_seed = self.next_handle;
         handle
     }
 
@@ -1022,18 +1250,32 @@ impl CadDocument {
         self.next_handle
     }
 
-    /// Add an entity to the document
+    /// Add an entity to the document (model space).
+    ///
+    /// The entity is stored in both the flat entity map (used by the DXF
+    /// writer) and the *Model_Space block record (used by the DWG writer).
     pub fn add_entity(&mut self, mut entity: EntityType) -> Result<Handle> {
         // Allocate a handle if the entity doesn't have one
-        let handle = if entity.as_entity().handle().is_null() {
+        let handle = if entity.common().handle.is_null() {
             let h = self.allocate_handle();
             entity.as_entity_mut().set_handle(h);
             h
         } else {
-            entity.as_entity().handle()
+            entity.common().handle
         };
 
-        // Store the entity
+        // Set owner to *Model_Space block record if not already set
+        let ms_handle = self.header.model_space_block_handle;
+        if entity.common().owner_handle.is_null() && !ms_handle.is_null() {
+            entity.common_mut().owner_handle = ms_handle;
+        }
+
+        // Also add to *Model_Space block record (DWG writer reads from here)
+        if let Some(ms) = self.block_records.get_mut("*Model_Space") {
+            ms.entities.push(entity.clone());
+        }
+
+        // Store in the flat entity map (DXF writer reads from here)
         self.entities.insert(handle, entity);
         Ok(handle)
     }

@@ -7,34 +7,34 @@ use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transparency, Vecto
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachmentPoint {
     /// Top left
-    TopLeft,
+    TopLeft = 1,
     /// Top center
-    TopCenter,
+    TopCenter = 2,
     /// Top right
-    TopRight,
+    TopRight = 3,
     /// Middle left
-    MiddleLeft,
+    MiddleLeft = 4,
     /// Middle center
-    MiddleCenter,
+    MiddleCenter = 5,
     /// Middle right
-    MiddleRight,
+    MiddleRight = 6,
     /// Bottom left
-    BottomLeft,
+    BottomLeft = 7,
     /// Bottom center
-    BottomCenter,
+    BottomCenter = 8,
     /// Bottom right
-    BottomRight,
+    BottomRight = 9,
 }
 
 /// Drawing direction for MText
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrawingDirection {
     /// Left to right
-    LeftToRight,
+    LeftToRight = 1,
     /// Top to bottom
-    TopToBottom,
+    TopToBottom = 2,
     /// By style
-    ByStyle,
+    ByStyle = 3,
 }
 
 /// A multi-line text entity

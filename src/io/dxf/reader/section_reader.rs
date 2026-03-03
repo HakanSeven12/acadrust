@@ -1592,6 +1592,11 @@ impl<'a> SectionReader<'a> {
                         style.flags.upside_down = (flags & 4) != 0;
                     }
                 }
+                42 => {
+                    if let Some(lh) = pair.as_double() {
+                        style.last_height = lh;
+                    }
+                }
                 _ => {}
             }
         }

@@ -43,6 +43,8 @@ pub struct TextStyle {
     pub width_factor: f64,
     /// Oblique angle in radians
     pub oblique_angle: f64,
+    /// Last height used (code 42, default 2.5)
+    pub last_height: f64,
     /// Primary font file name
     pub font_file: String,
     /// Big font file name (for Asian languages)
@@ -61,6 +63,7 @@ impl TextStyle {
             height: 0.0,
             width_factor: 1.0,
             oblique_angle: 0.0,
+            last_height: 2.5,
             font_file: "txt".to_string(),
             big_font_file: String::new(),
             true_type_font: String::new(),
@@ -76,6 +79,7 @@ impl TextStyle {
             height: 0.0,
             width_factor: 1.0,
             oblique_angle: 0.0,
+            last_height: 2.5,
             font_file: "txt".to_string(),
             big_font_file: String::new(),
             true_type_font: String::new(),
@@ -87,6 +91,15 @@ impl TextStyle {
         TextStyle {
             true_type_font: font.into(),
             ..Self::new(name)
+        }
+    }
+
+    /// Get the effective last height (returns last_height, or default 2.5 if 0)
+    pub fn effective_last_height(&self) -> f64 {
+        if self.last_height > 0.0 {
+            self.last_height
+        } else {
+            2.5
         }
     }
 

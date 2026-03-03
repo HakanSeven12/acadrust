@@ -18,10 +18,13 @@ Thumbs.db
 # Test files
 /test_files/
 /samples/
-*.dwg
+
 *.dxf
+*.dxb
+*.dwg
+
 
 # Documentation
 /docs/site/
 
-/ACadSharp/
+/ACadSharp-master/

@@ -483,5 +483,53 @@ impl EntityType {
             EntityType::Unknown(e) => &e.common,
         }
     }
+
+    /// Get a mutable reference to the entity's common data
+    pub fn common_mut(&mut self) -> &mut EntityCommon {
+        match self {
+            EntityType::Point(e) => &mut e.common,
+            EntityType::Line(e) => &mut e.common,
+            EntityType::Circle(e) => &mut e.common,
+            EntityType::Arc(e) => &mut e.common,
+            EntityType::Ellipse(e) => &mut e.common,
+            EntityType::Polyline(e) => &mut e.common,
+            EntityType::Polyline2D(e) => &mut e.common,
+            EntityType::Polyline3D(e) => &mut e.common,
+            EntityType::LwPolyline(e) => &mut e.common,
+            EntityType::Text(e) => &mut e.common,
+            EntityType::MText(e) => &mut e.common,
+            EntityType::Spline(e) => &mut e.common,
+            EntityType::Dimension(e) => &mut e.base_mut().common,
+            EntityType::Hatch(e) => &mut e.common,
+            EntityType::Solid(e) => &mut e.common,
+            EntityType::Face3D(e) => &mut e.common,
+            EntityType::Insert(e) => &mut e.common,
+            EntityType::Block(e) => &mut e.common,
+            EntityType::BlockEnd(e) => &mut e.common,
+            EntityType::Ray(e) => &mut e.common,
+            EntityType::XLine(e) => &mut e.common,
+            EntityType::Viewport(e) => &mut e.common,
+            EntityType::AttributeDefinition(e) => &mut e.common,
+            EntityType::AttributeEntity(e) => &mut e.common,
+            EntityType::Leader(e) => &mut e.common,
+            EntityType::MultiLeader(e) => &mut e.common,
+            EntityType::MLine(e) => &mut e.common,
+            EntityType::Mesh(e) => &mut e.common,
+            EntityType::RasterImage(e) => &mut e.common,
+            EntityType::Solid3D(e) => &mut e.common,
+            EntityType::Region(e) => &mut e.common,
+            EntityType::Body(e) => &mut e.common,
+            EntityType::Table(e) => &mut e.common,
+            EntityType::Tolerance(e) => &mut e.common,
+            EntityType::PolyfaceMesh(e) => &mut e.common,
+            EntityType::Wipeout(e) => &mut e.common,
+            EntityType::Shape(e) => &mut e.common,
+            EntityType::Underlay(e) => &mut e.common,
+            EntityType::Seqend(e) => &mut e.common,
+            EntityType::Ole2Frame(e) => &mut e.common,
+            EntityType::PolygonMesh(e) => &mut e.common,
+            EntityType::Unknown(e) => &mut e.common,
+        }
+    }
 }
 

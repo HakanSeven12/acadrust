@@ -1,13 +1,13 @@
-# acadrust
+# acadrust 0.2.0
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
 
-**A pure Rust library for reading and writing CAD drawing exchange files (DXF).**
+**A pure Rust library for reading and writing CAD files (DXF and DWG).**
 
-acadrust provides comprehensive support for the DXF file format with a focus on correctness, type safety, and completeness. Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp), this library brings full-featured DXF file manipulation to the Rust ecosystem.
+acadrust provides comprehensive support for the DXF and DWG file formats with a focus on correctness, type safety, and completeness. Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp), this library brings full-featured CAD file manipulation to the Rust ecosystem.
 
 ---
 
@@ -15,7 +15,8 @@ acadrust provides comprehensive support for the DXF file format with a focus on 
 
 ### Core Capabilities
 
-- **📖 Read & Write** — Full support for both ASCII and Binary DXF formats
+- **📖 Read & Write DXF** — Full support for both ASCII and Binary DXF formats
+- **📐 Read & Write DWG** — Native DWG binary input/output for R13 through R2018 (8 versions)
 - **🔒 Type Safe** — Leverages Rust's type system with strongly-typed entities, tables, and objects
 - **🌐 Encoding Support** — Automatic code page detection and character encoding for pre-2007 files (~40 code pages via `encoding_rs`)
 - **🛡️ Failsafe Mode** — Optional error-tolerant parsing that collects diagnostics instead of aborting
@@ -25,18 +26,19 @@ acadrust provides comprehensive support for the DXF file format with a focus on 
 
 ### File Version Support
 
-| Version Code | AutoCAD Version |
-|-------------|-----------------|
-| AC1012 | R13 |
-| AC1014 | R14 |
-| AC1015 | 2000 |
-| AC1018 | 2004 |
-| AC1021 | 2007 (UTF-8) |
-| AC1024 | 2010 |
-| AC1027 | 2013 |
-| AC1032 | 2018+ |
+| Version Code | AutoCAD Version | DXF Read | DXF Write | DWG Read | DWG Write |
+|-------------|-----------------|----------|-----------|----------|----------|
+| AC1009 | R12 | ✅ | ✅ | — | — |
+| AC1012 | R13 | ✅ | ✅ | ✅ | ✅ |
+| AC1014 | R14 | ✅ | ✅ | ✅ | ✅ |
+| AC1015 | 2000 | ✅ | ✅ | ✅ | ✅ |
+| AC1018 | 2004 | ✅ | ✅ | ✅ | ✅ |
+| AC1021 | 2007 (UTF-8) | ✅ | ✅ | ✅ | ✅ |
+| AC1024 | 2010 | ✅ | ✅ | ✅ | ✅ |
+| AC1027 | 2013 | ✅ | ✅ | ✅ | ✅ |
+| AC1032 | 2018+ | ✅ | ✅ | ✅ | ✅ |
 
-### Supported Entity Types (38)
+### Supported Entity Types (41)
 
 <details>
 <summary>Click to expand full entity list</summary>
@@ -50,6 +52,7 @@ acadrust provides comprehensive support for the DXF file format with a focus on 
 
 #### Polylines
 - **Polyline** — 2D polyline with optional bulge
+- **Polyline2D** — Heavy 2D polyline with vertex entities
 - **Polyline3D** — 3D polyline
 - **LwPolyline** — Lightweight polyline (optimized 2D)
 - **PolyfaceMesh** — 3D mesh defined by vertices and faces
@@ -250,6 +253,59 @@ fn main() -> acadrust::Result<()> {
 }
 ```
 
+### Reading a DWG File
+
+```rust
+use acadrust::io::dwg::DwgReader;
+
+fn main() -> acadrust::Result<()> {
+    let mut reader = DwgReader::from_file("drawing.dwg")?;
+    let doc = reader.read()?;
+    
+    println!("Version: {:?}", doc.header().version);
+    println!("Entities: {}", doc.entities().len());
+    
+    for entity in doc.entities() {
+        println!("Entity: {:?}", entity);
+    }
+    
+    Ok(())
+}
+```
+
+### Writing a DWG File
+
+```rust
+use acadrust::{CadDocument, DwgWriter};
+use acadrust::entities::*;
+use acadrust::types::{Color, DxfVersion, Vector3};
+
+fn main() -> acadrust::Result<()> {
+    // Create a document (default: R2018)
+    let mut doc = CadDocument::new();
+    
+    // Or target a specific version
+    // let mut doc = CadDocument::with_version(DxfVersion::AC1015); // R2000
+    
+    // Add entities
+    let mut line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
+    line.common.color = Color::RED;
+    doc.add_entity(EntityType::Line(line))?;
+    
+    let mut circle = Circle::from_coords(50.0, 25.0, 0.0, 15.0);
+    circle.common.color = Color::BLUE;
+    doc.add_entity(EntityType::Circle(circle))?;
+    
+    // Write to DWG
+    DwgWriter::write_to_file("output.dwg", &doc)?;
+    
+    // Or write to a Vec<u8>
+    let bytes = DwgWriter::write_to_vec(&doc)?;
+    
+    Ok(())
+}
+```
+
 ### Working with Layers
 
 ```rust
@@ -316,21 +372,21 @@ acadrust uses a trait-based design for maximum flexibility and extensibility:
 ┌──────────────────────────────────────────────────────────────┐
 │                       CadDocument                            │
 ├──────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐ │
-│  │   Header    │  │    Tables    │  │      Entities       │ │
-│  │  Variables  │  │              │  │                     │ │
-│  └─────────────┘  │ - Layers     │  │ - Lines, Circles    │ │
-│                   │ - LineTypes  │  │ - Polylines, Arcs   │ │
-│  ┌─────────────┐  │ - Styles     │  │ - Text, Dimensions  │ │
-│  │   Blocks    │  │ - DimStyles  │  │ - Hatches, Splines  │ │
-│  │             │  │ - VPorts     │  │ - 3D, Mesh, Images  │ │
-│  └─────────────┘  └──────────────┘  └─────────────────────┘ │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐  │
+│  │   Header    │  │    Tables    │  │      Entities       │  │
+│  │  Variables  │  │              │  │                     │  │
+│  └─────────────┘  │ - Layers     │  │ - Lines, Circles    │  │
+│                   │ - LineTypes  │  │ - Polylines, Arcs   │  │
+│  ┌─────────────┐  │ - Styles     │  │ - Text, Dimensions  │  │
+│  │   Blocks    │  │ - DimStyles  │  │ - Hatches, Splines  │  │
+│  │             │  │ - VPorts     │  │ - 3D, Mesh, Images  │  │
+│  └─────────────┘  └──────────────┘  └─────────────────────┘  │
 │                                                              │
-│  ┌──────────────────────────────────┐  ┌──────────────────┐ │
-│  │            Objects               │  │  Notifications   │ │
-│  │  Dictionaries, Groups, Styles,   │  │  Warnings, Errors│ │
-│  │  Layouts, XRecords, Materials    │  │  Diagnostics     │ │
-│  └──────────────────────────────────┘  └──────────────────┘ │
+│  ┌──────────────────────────────────┐  ┌──────────────────┐  │
+│  │            Objects               │  │  Notifications   │  │
+│  │  Dictionaries, Groups, Styles,   │  │  Warnings, Errors│  │
+│  │  Layouts, XRecords, Materials    │  │  Diagnostics     │  │
+│  └──────────────────────────────────┘  └──────────────────┘  │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│
 │  │                      Classes                             ││
@@ -354,6 +410,8 @@ acadrust uses a trait-based design for maximum flexibility and extensibility:
 | `CadDocument` | Central document container |
 | `DxfReader` | DXF file reader (ASCII and binary) |
 | `DxfWriter` | DXF file writer |
+| `DwgReader` | DWG binary file reader |
+| `DwgWriter` | DWG binary file writer |
 | `DxfReaderConfiguration` | Reader options (failsafe mode) |
 | `Handle` | Unique object identifier |
 | `Vector2` / `Vector3` | 2D and 3D coordinate types |
@@ -397,6 +455,30 @@ cargo test -- --nocapture
 cargo test test_read_minimal_dxf
 ```
 
+### Generate DWG Samples
+
+Generate a full set of DWG test files for verification in AutoCAD, IntelliCAD, or BricsCAD:
+
+```bash
+cargo run --example dwg_samples
+```
+
+This produces 40 DWG files in `target/dwg_samples/`:
+
+| Folder | Contents |
+|--------|----------|
+| `individual/` | One file per entity type (32 files) — line, circle, arc, spline, hatch, dimensions, mesh, etc. |
+| `by_version/` | Showcase file per DWG version (5 files) — R2000 through R2018 |
+| `stress/` | Larger files for stress testing (3 files) — 200–500 entities each |
+
+Generate a comprehensive matrix of every entity type × every DWG version (R13–R2018):
+
+```bash
+cargo run --example gen_all_entities_all_versions
+```
+
+This produces 216 DWG files in `target/entities_dwg/<VERSION>/` — 27 entity types across 8 versions.
+
 Run benchmarks:
 
 ```bash
@@ -414,48 +496,17 @@ cargo bench
 - [x] Character encoding / code page support
 - [x] Failsafe (error-tolerant) reading mode
 - [x] Unknown entity preservation
-- [ ] Full DWG binary format support
+- [x] DWG binary write (R13, R14, R2000, R2004, R2007, R2010, R2013, R2018)
+- [x] DWG binary read (R13 through R2018)
 - [ ] Geometric operations (offset, trim, extend)
 - [ ] SVG/PDF export
 - [ ] Spatial indexing for large drawings
 
 ---
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/hakanaktt/acadrust.git
-cd acadrust
-
-# Build the project
-cargo build
-
-# Run tests
-cargo test
-
-# Check formatting
-cargo fmt --check
-
-# Run clippy
-cargo clippy
-```
-
----
-
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](LICENSE) file for details.
 
 ---
 
@@ -463,7 +514,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [ACadSharp](https://github.com/DomCR/ACadSharp) - The C# library that inspired this project
 - The Rust community for excellent tooling and libraries
-- All contributors who help improve this library
 
 ---
 

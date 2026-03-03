@@ -84,6 +84,8 @@ pub struct DimStyle {
     pub dimsoxd: bool,
     /// Text background fill mode (DIMTFILL, code 69)
     pub dimtfill: i16,
+    /// Text background fill color (DIMTFILLCLR, code 70)
+    pub dimtfillclr: i16,
     /// Text movement (DIMTMOVE, code 279)
     pub dimtmove: i16,
     /// Text direction (DIMTXTDIRECTION, code 295)
@@ -230,6 +232,7 @@ impl DimStyle {
             dimtix: false,
             dimsoxd: false,
             dimtfill: 0,
+            dimtfillclr: 0,
             dimtmove: 0,
             dimtxtdirection: false,
             dimtxsty_handle: Handle::NULL,
