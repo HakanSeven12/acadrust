@@ -1,15 +1,15 @@
 [package]
 name = "acadrust"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Hakan AK"]
-description = "A pure Rust library for reading and writing CAD files in DXF format (ASCII and Binary)"
+description = "A pure Rust library for reading and writing CAD files in DXF format (ASCII and Binary) and DWG format (Binary)."
 license = "MPL-2.0"
 repository = "https://github.com/hakanaktt/acadrust"
 homepage = "https://github.com/hakanaktt/acadrust"
 documentation = "https://docs.rs/acadrust"
 readme = "README.md"
-keywords = ["cad", "dxf", "autocad", "drawing", "vector-graphics"]
+keywords = ["cad", "dxf", "dwg", "autocad", "drawing", "vector-graphics"]
 categories = ["parser-implementations", "encoding"]
 
 [dependencies]
