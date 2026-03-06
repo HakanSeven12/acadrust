@@ -270,6 +270,24 @@ pub struct BlockHeaderData {
 //  Reader methods
 // ════════════════════════════════════════════════════════════════════════
 
+/// Read xref-dependant bits for a table entry.
+/// - R13/R14: B (64-flag) + B (xdep)
+/// - R2000-R2006: B (64-flag) + BS (xrefindex+1) + B (xdep)
+/// - R2007+: BS (combined)
+fn read_xref_dependant_bits(reader: &mut DwgMergedReader, version: DwgVersion) {
+    if version.r2007_plus() {
+        let _combined = reader.read_bit_short();
+    } else if version.r2000_plus() {
+        let _xref_64 = reader.read_bit();
+        let _xref_index = reader.read_bit_short();
+        let _xref_dep = reader.read_bit();
+    } else {
+        // R13/R14: only 64-flag and xdep
+        let _xref_64 = reader.read_bit();
+        let _xref_dep = reader.read_bit();
+    }
+}
+
 /// Read a generic table control object (after non-entity common data).
 pub fn read_table_control(
     reader: &mut DwgMergedReader,
@@ -313,9 +331,8 @@ pub fn read_layer(
 ) -> LayerData {
     let name = reader.read_variable_text();
 
-    // Xref-dependant bits (64-flag + xref-ref)
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    // Xref-dependant bits (version-dependent encoding)
+    read_xref_dependant_bits(reader, version);
 
     let frozen;
     let off;
@@ -380,10 +397,10 @@ pub fn read_layer(
 /// Read text STYLE table entry data.
 pub fn read_text_style(
     reader: &mut DwgMergedReader,
+    version: DwgVersion,
 ) -> TextStyleData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let is_shape_file = reader.read_bit();
     let is_vertical = reader.read_bit();
@@ -410,8 +427,7 @@ pub fn read_linetype(
     version: DwgVersion,
 ) -> LinetypeData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let description = reader.read_variable_text();
     let pattern_length = reader.read_bit_double();
@@ -461,8 +477,7 @@ pub fn read_view(
     version: DwgVersion,
 ) -> ViewData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let height = reader.read_bit_double();
     let width = reader.read_bit_double();
@@ -527,8 +542,7 @@ pub fn read_ucs(
     version: DwgVersion,
 ) -> UcsData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let origin = reader.read_3bit_double();
     let x_axis = reader.read_3bit_double();
@@ -562,8 +576,7 @@ pub fn read_vport(
     version: DwgVersion,
 ) -> VPortData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let view_height = reader.read_bit_double();
     let aspect_ratio_times_height = reader.read_bit_double();
@@ -660,10 +673,10 @@ pub fn read_vport(
 /// Read APPID table entry data.
 pub fn read_appid(
     reader: &mut DwgMergedReader,
+    version: DwgVersion,
 ) -> AppIdData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let unknown_byte = reader.read_byte();
     let xref_handle = reader.read_handle();
@@ -680,8 +693,7 @@ pub fn read_dimstyle(
     _dxf_version: DxfVersion,
 ) -> DimStyleData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     // Defaults
     let mut ds = DimStyleData {
@@ -841,8 +853,7 @@ pub fn read_block_header(
     version: DwgVersion,
 ) -> BlockHeaderData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let anonymous = reader.read_bit();
     let has_attributes = reader.read_bit();
@@ -968,10 +979,10 @@ pub fn read_vport_entity_control(
 /// Read VPORT_ENTITY_HEADER (type 71) — R13-R14 viewport entity header.
 pub fn read_vport_entity_header(
     reader: &mut DwgMergedReader,
+    version: DwgVersion,
 ) -> VPortEntityHeaderData {
     let name = reader.read_variable_text();
-    let _xref_64 = reader.read_bit();
-    let _xref_ref = reader.read_bit();
+    read_xref_dependant_bits(reader, version);
 
     let flag = reader.read_bit();
     let entity_handle = reader.read_handle();
@@ -1051,7 +1062,8 @@ mod tests {
         let mut reader = make_reader(dwg, dxf, |w| {
             w.write_variable_text("Layer0");
             w.write_bit(false); // xref_64
-            w.write_bit(false); // xref_ref
+            w.write_bit_short(0); // xrefindex+1
+            w.write_bit(false); // xref_dep
             // R2000+: packed values (lineweight=0, frozen=0, off=0, locked=0, plottable=1)
             w.write_bit_short(0b10000); // plottable only
             // Color
@@ -1079,8 +1091,9 @@ mod tests {
 
         let mut reader = make_reader(dwg, dxf, |w| {
             w.write_variable_text("Standard");
-            w.write_bit(false);
-            w.write_bit(false);
+            w.write_bit(false); // xref_64
+            w.write_bit_short(0); // xrefindex+1
+            w.write_bit(false); // xref_dep
             w.write_bit(false); // shape file
             w.write_bit(false); // vertical
             w.write_bit_double(0.0);
@@ -1093,7 +1106,7 @@ mod tests {
             w.write_handle(DwgReferenceType::HardPointer, 0);
         });
 
-        let style = read_text_style(&mut reader);
+        let style = read_text_style(&mut reader, dwg);
         assert_eq!(style.name, "Standard");
         assert!((style.width_factor - 1.0).abs() < 1e-10);
         assert_eq!(style.font_file, "txt.shx");
@@ -1106,13 +1119,14 @@ mod tests {
 
         let mut reader = make_reader(dwg, dxf, |w| {
             w.write_variable_text("ACAD");
-            w.write_bit(false);
-            w.write_bit(false);
+            w.write_bit(false); // xref_64
+            w.write_bit_short(0); // xrefindex+1
+            w.write_bit(false); // xref_dep
             w.write_byte(0);
             w.write_handle(DwgReferenceType::HardPointer, 0);
         });
 
-        let app = read_appid(&mut reader);
+        let app = read_appid(&mut reader, dwg);
         assert_eq!(app.name, "ACAD");
     }
 }

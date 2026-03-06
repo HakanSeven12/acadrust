@@ -326,10 +326,10 @@ impl DwgObjectReader {
             // If not by-layer, would read linetype handle
         }
 
-        // Pre-R2004: Nolinks + prev/next
+        // Pre-R2004: Nolinks + prev/next (R13/R14 and R2000-R2002)
         let mut prev_entity_handle = None;
         let mut next_entity_handle = None;
-        if !self.version.r2004_plus() && self.version.r2000_plus() {
+        if !self.version.r2004_plus() {
             let nolinks = reader.read_bit();
             if !nolinks {
                 prev_entity_handle = Some(reader.read_handle());
@@ -349,11 +349,10 @@ impl DwgObjectReader {
         let linetype_scale = reader.read_bit_double();
 
         // R13-R14: invisibility + return early
-        // R13/R14 DWG convention: 0 = invisible, non-zero = visible
-        // (inverted from R2000+ where 0 = visible, 1 = invisible)
+        // DXF group 60 convention (all DWG versions): 0 = visible, non-zero = invisible
         let invisible;
         if self.version.r13_14_only() {
-            invisible = reader.read_bit_short() == 0;
+            invisible = reader.read_bit_short() != 0;
             return EntityCommonData {
                 common,
                 has_graphic,

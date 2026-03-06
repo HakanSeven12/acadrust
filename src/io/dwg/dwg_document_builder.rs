@@ -164,7 +164,10 @@ impl DwgDocumentBuilder {
                             Some(("block", obj_handle, data.name))
                         },
                         OBJ_STYLE => {
-                            let data = tables::read_text_style(&mut reader);
+                            let data = tables::read_text_style(
+                                &mut reader,
+                                self.obj_reader.version(),
+                            );
                             Some(("style", obj_handle, data.name))
                         },
                         OBJ_LTYPE => {
