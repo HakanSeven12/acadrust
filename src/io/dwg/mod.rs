@@ -1,8 +1,24 @@
-//! DWG binary file format support
+//! DWG binary file format support.
 //!
-//! This module provides support for reading and writing DWG binary files,
-//! AutoCAD's native file format. DWG files use bit-granularity encoding,
-//! version-specific data layouts, and LZ77 compression (R2004+).
+//! Read and write AutoCAD's native binary format.  DWG files use
+//! bit-granularity encoding, version-specific data layouts, and LZ77
+//! compression (R2004+).
+//!
+//! # Reading
+//!
+//! ```rust,ignore
+//! use acadrust::DwgReader;
+//!
+//! let doc = DwgReader::from_file("drawing.dwg")?.read()?;
+//! ```
+//!
+//! # Writing
+//!
+//! ```rust,ignore
+//! use acadrust::DwgWriter;
+//!
+//! DwgWriter::write_to_file("output.dwg", &doc)?;
+//! ```
 //!
 //! ## Supported versions
 //!
@@ -12,7 +28,7 @@
 //! | AC1014      | R14     | Linear      |
 //! | AC1015      | R2000   | Linear      |
 //! | AC1018      | R2004   | Paged + LZ77 |
-//! | AC1021      | R2007   | Paged + LZ77 (read only) |
+//! | AC1021      | R2007   | Paged + LZ77 |
 //! | AC1024      | R2010   | Paged + LZ77 |
 //! | AC1027      | R2013   | Paged + LZ77 |
 //! | AC1032      | R2018   | Paged + LZ77 |

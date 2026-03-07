@@ -1,4 +1,21 @@
-//! CAD document structure
+//! Central CAD document structure.
+//!
+//! [`CadDocument`] is the top-level container that holds everything in a
+//! drawing: header variables, tables (layers, line types, text styles, …),
+//! entities, non-graphical objects, block definitions, and classes.
+//!
+//! # Creating a document
+//!
+//! ```rust
+//! use acadrust::CadDocument;
+//!
+//! // Default version (R2018 / AC1032)
+//! let doc = CadDocument::new();
+//!
+//! // Specific version
+//! use acadrust::types::DxfVersion;
+//! let doc = CadDocument::with_version(DxfVersion::AC1015); // R2000
+//! ```
 
 use crate::classes::DxfClassCollection;
 use crate::entities::{EntityCommon, EntityType};

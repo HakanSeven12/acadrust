@@ -148,7 +148,7 @@ pub struct DwgPageCrcInfo {
 ///   result is returned rather than propagating the error.
 /// * Missing pages in a section are skipped instead of aborting.
 /// * Skipped records and sections are reported through the
-///   [`CadDocument::notifications`] collection.
+///   [`CadDocument::notifications`](crate::document::CadDocument::notifications) collection.
 #[derive(Debug, Clone)]
 pub struct DwgReadOptions {
     /// When `true`, recover as much data as possible from corrupt files.

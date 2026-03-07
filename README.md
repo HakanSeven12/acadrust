@@ -1,4 +1,4 @@
-# acadrust 0.2.4
+# acadrust 0.2.5
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)

@@ -1,4 +1,14 @@
-//! CAD entity types and traits
+//! Graphical entity types.
+//!
+//! This module contains all 41 supported CAD entity types — from simple
+//! primitives ([`Line`], [`Circle`], [`Arc`]) through complex objects
+//! ([`Hatch`], [`Spline`], [`MultiLeader`], [`Mesh`]).
+//!
+//! Every entity carries [`EntityCommon`] data (layer, color, line weight,
+//! handle, etc.) alongside its type-specific fields.
+//!
+//! Entities are stored in [`CadDocument`](crate::document::CadDocument) and
+//! wrapped in the [`EntityType`] enum for heterogeneous collections.
 
 use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transparency, Vector3};
 

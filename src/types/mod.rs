@@ -1,4 +1,15 @@
-//! Core types used throughout acadrust
+//! Core types used throughout acadrust.
+//!
+//! Re-exports the fundamental value types that appear across entities,
+//! tables, and I/O:
+//!
+//! - [`Vector2`] / [`Vector3`] — 2-D and 3-D coordinate types
+//! - [`Color`] — ACI index, true-color RGB, or ByLayer/ByBlock
+//! - [`Handle`] — unique 64-bit object identifier
+//! - [`DxfVersion`] — file version enum (AC1009 … AC1032)
+//! - [`LineWeight`] — line thickness
+//! - [`Transform`] / [`Matrix4`] — affine transformation types
+//! - [`BoundingBox2D`] / [`BoundingBox3D`] — axis-aligned bounds
 
 pub mod bounds;
 pub mod color;

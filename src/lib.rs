@@ -1,54 +1,81 @@
 //! # acadrust
 //!
-//! A pure Rust library for reading and writing CAD files in DXF format.
+//! A pure Rust library for reading and writing CAD files in **DXF** and **DWG** formats.
 //!
-//! This library provides comprehensive DXF file support with high performance
-//! and memory efficiency, inspired by [ACadSharp](https://github.com/DomCR/ACadSharp).
+//! acadrust provides comprehensive support for both file formats with a focus on
+//! correctness, type safety, and completeness.  Inspired by
+//! [ACadSharp](https://github.com/DomCR/ACadSharp), it brings full-featured CAD
+//! file manipulation to the Rust ecosystem.
 //!
-//! ## Features
+//! ## Highlights
 //!
-//! - Read and write DXF files (ASCII and Binary formats)
-//! - Support for 30+ entity types
-//! - Complete table system (Layers, LineTypes, Blocks, TextStyles, DimensionStyles)
-//! - Extended data (XData) support
-//! - Multiple DXF versions (R12 through 2018+)
+//! - **DXF** — Read and write ASCII and Binary DXF (R12 through R2018+)
+//! - **DWG** — Read and write native DWG binary files (R13 through R2018+)
+//! - **41 entity types**, 9 table types, 20+ non-graphical objects
+//! - **Type safe** — strongly-typed entities, tables, and enums
+//! - **Failsafe mode** — error-tolerant parsing that collects diagnostics
+//! - **Encoding support** — automatic code page detection for pre-2007 files
 //!
-//! ## Quick Start
+//! ## Quick Start — DXF
 //!
 //! ```rust,ignore
-//! use acadrust::{CadDocument, io::dxf::DxfReader};
+//! use acadrust::{CadDocument, DxfReader, DxfWriter};
 //!
-//! // Read a DXF file
-//! let doc = DxfReader::from_file("sample.dxf")?.read()?;
+//! // Read
+//! let doc = DxfReader::from_file("input.dxf")?.read()?;
+//! println!("Entities: {}", doc.entities().len());
 //!
-//! // Access entities
-//! for entity in doc.entities() {
-//!     println!("Entity: {:?}", entity);
-//! }
-//!
-//! // Write to DXF
-//! use acadrust::io::dxf::DxfWriter;
-//! DxfWriter::new(doc).write_to_file("output.dxf")?;
+//! // Write
+//! DxfWriter::new(&doc).write_to_file("output.dxf")?;
 //! # Ok::<(), acadrust::error::DxfError>(())
 //! ```
 //!
-//! ## Architecture
+//! ## Quick Start — DWG
 //!
-//! The library uses a trait-based design for maximum flexibility:
+//! ```rust,ignore
+//! use acadrust::{CadDocument, DwgReader, DwgWriter};
+//! use acadrust::entities::*;
+//! use acadrust::types::Vector3;
 //!
-//! - `CadObject` - Base trait for all CAD objects
-//! - `Entity` - Trait for graphical entities
-//! - `TableEntry` - Trait for table entries
-//! - `CadDocument` - Central document structure
+//! // Read
+//! let doc = DwgReader::from_file("input.dwg")?.read()?;
 //!
-//! ## Performance
+//! // Create and write
+//! let mut doc = CadDocument::new();
+//! let line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
+//! doc.add_entity(EntityType::Line(line))?;
+//! DwgWriter::write_to_file("output.dwg", &doc)?;
+//! # Ok::<(), acadrust::error::DxfError>(())
+//! ```
 //!
-//! acadrust is designed for high performance:
+//! ## Module Overview
 //!
-//! - 2-3x faster than the C# version
-//! - 30-50% less memory usage
-//! - Zero-copy parsing where possible
-//! - Parallel processing for large files
+//! | Module | Contents |
+//! |--------|----------|
+//! | [`document`] | [`CadDocument`] — the central drawing container |
+//! | [`entities`] | 41 graphical entity types ([`Line`], [`Circle`], [`Spline`], …) |
+//! | [`tables`]   | Table entries ([`Layer`], [`LineType`], [`TextStyle`], [`DimStyle`], …) |
+//! | [`objects`]   | Non-graphical objects (dictionaries, layouts, styles) |
+//! | [`types`]     | Primitives ([`Vector3`], [`Color`], [`Handle`], [`DxfVersion`], …) |
+//! | [`io`]        | Readers and writers for DXF and DWG |
+//! | [`classes`]   | DXF class definitions (CLASSES section) |
+//! | [`xdata`]     | Extended data (XData) attached to entities |
+//! | [`error`]     | Error types ([`DxfError`]) and [`Result`] alias |
+//! | [`notification`] | Structured parse diagnostics |
+//!
+//! ## File Version Support
+//!
+//! | Code | AutoCAD | DXF | DWG |
+//! |------|---------|-----|-----|
+//! | AC1009 | R12     | R/W | —   |
+//! | AC1012 | R13     | R/W | R/W |
+//! | AC1014 | R14     | R/W | R/W |
+//! | AC1015 | 2000    | R/W | R/W |
+//! | AC1018 | 2004    | R/W | R/W |
+//! | AC1021 | 2007    | R/W | R/W |
+//! | AC1024 | 2010    | R/W | R/W |
+//! | AC1027 | 2013    | R/W | R/W |
+//! | AC1032 | 2018+   | R/W | R/W |
 
 #![allow(missing_docs)]
 #![warn(rustdoc::missing_crate_level_docs)]

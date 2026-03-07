@@ -1,4 +1,7 @@
-//! Error types for acadrust library
+//! Error types for acadrust.
+//!
+//! The crate uses [`DxfError`] as the single error enum and provides a
+//! [`Result<T>`] type alias (`Result<T, DxfError>`) for convenience.
 
 use std::io;
 use thiserror::Error;

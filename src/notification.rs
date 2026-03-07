@@ -5,7 +5,7 @@
 //! items rather than being silently dropped or causing hard errors.
 //!
 //! After a read/write operation the caller can inspect
-//! [`CadDocument::notifications`] to see what was encountered.
+//! [`CadDocument::notifications`](crate::document::CadDocument::notifications) to see what was encountered.
 
 use std::fmt;
 

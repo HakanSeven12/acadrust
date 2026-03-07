@@ -1,4 +1,23 @@
-//! DXF (Drawing Exchange Format) reading and writing
+//! DXF (Drawing Exchange Format) reading and writing.
+//!
+//! Supports both **ASCII** and **Binary** DXF for versions R12 (AC1009)
+//! through R2018+ (AC1032).
+//!
+//! # Reading
+//!
+//! ```rust,ignore
+//! use acadrust::DxfReader;
+//!
+//! let doc = DxfReader::from_file("drawing.dxf")?.read()?;
+//! ```
+//!
+//! # Writing
+//!
+//! ```rust,ignore
+//! use acadrust::DxfWriter;
+//!
+//! DxfWriter::new(&doc).write_to_file("output.dxf")?;
+//! ```
 
 mod dxf_code;
 mod group_code_value;

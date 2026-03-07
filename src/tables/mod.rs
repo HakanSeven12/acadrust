@@ -1,4 +1,18 @@
-//! CAD table types and management
+//! Table types and the generic [`Table`] container.
+//!
+//! Tables store named, reusable definitions that entities reference:
+//!
+//! | Type | Purpose |
+//! |------|----------|
+//! | [`Layer`] | Drawing layers (color, linetype, visibility) |
+//! | [`LineType`] | Dash patterns |
+//! | [`TextStyle`] | Font / text formatting |
+//! | [`DimStyle`] | Dimension appearance |
+//! | [`BlockRecord`] | Block definition registry |
+//! | [`AppId`] | Application identifier (XData) |
+//! | [`View`] | Named view configurations |
+//! | [`VPort`] | Viewport configurations |
+//! | [`Ucs`] | User coordinate systems |
 
 use crate::types::Handle;
 use indexmap::IndexMap;

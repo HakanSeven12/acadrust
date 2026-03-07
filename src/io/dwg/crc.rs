@@ -784,7 +784,7 @@ pub fn dwg_ac21_header_crc64(metadata: &[u8]) -> u64 {
 ///
 /// This is a modified Adler-32 that:
 /// 1. Derives initial `sum1`/`sum2` from a seed computation using data length
-/// 2. Processes bytes in 8-byte sub-chunks with reordered byte sequence: [6,7,4,5,2,3,0,1]
+/// 2. Processes bytes in 8-byte sub-chunks with reordered byte sequence: \[6,7,4,5,2,3,0,1\]
 /// 3. Processes in max 0x15B0-byte outer chunks (with modular reduction each)
 ///
 /// # Arguments
