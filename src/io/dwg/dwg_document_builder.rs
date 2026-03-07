@@ -138,7 +138,26 @@ impl DwgDocumentBuilder {
         let class_map = Self::build_class_type_map(document);
 
         // ── Pass 1: Build handle→name maps from table entries ──────────
+        //
+        // In addition to building handle→name lookup maps (for Pass 2
+        // entity resolution), we now also create full domain objects
+        // (Layer, BlockRecord, TextStyle, LineType, DimStyle) and
+        // populate the document tables.  This mirrors what the DXF
+        // reader does in its TABLES section reader.
         let mut maps = HandleMaps::new();
+
+        // Parsed table entries collected for post-loop domain-object creation.
+        // We collect first and create domain objects after the loop so that
+        // cross-references (e.g. layer → linetype name) can be resolved
+        // using the fully-populated handle→name maps.
+        enum ParsedEntry {
+            Layer(u64, tables::LayerData),
+            Block(u64, tables::BlockHeaderData),
+            Style(u64, tables::TextStyleData),
+            Ltype(u64, tables::LinetypeData),
+            DimStyle(u64, tables::DimStyleData),
+        }
+        let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
 
         for &handle in &handles {
             let offset = match self.obj_reader.offset_for(handle) {
@@ -181,28 +200,28 @@ impl DwgDocumentBuilder {
                                 self.obj_reader.version(),
                                 self.obj_reader.dxf_version(),
                             );
-                            Some(("layer", obj_handle, data.name))
+                            Some(ParsedEntry::Layer(obj_handle, data))
                         },
                         OBJ_BLOCK_HEADER => {
                             let data = tables::read_block_header(
                                 &mut reader,
                                 self.obj_reader.version(),
                             );
-                            Some(("block", obj_handle, data.name))
+                            Some(ParsedEntry::Block(obj_handle, data))
                         },
                         OBJ_STYLE => {
                             let data = tables::read_text_style(
                                 &mut reader,
                                 self.obj_reader.version(),
                             );
-                            Some(("style", obj_handle, data.name))
+                            Some(ParsedEntry::Style(obj_handle, data))
                         },
                         OBJ_LTYPE => {
                             let data = tables::read_linetype(
                                 &mut reader,
                                 self.obj_reader.version(),
                             );
-                            Some(("ltype", obj_handle, data.name))
+                            Some(ParsedEntry::Ltype(obj_handle, data))
                         },
                         OBJ_DIMSTYLE => {
                             let data = tables::read_dimstyle(
@@ -210,21 +229,22 @@ impl DwgDocumentBuilder {
                                 self.obj_reader.version(),
                                 self.obj_reader.dxf_version(),
                             );
-                            Some(("dimstyle", obj_handle, data.name))
+                            Some(ParsedEntry::DimStyle(obj_handle, data))
                         },
                         _ => None,
                     }
                 }));
                 match table_result {
-                    Ok(Some((kind, h, name))) => {
-                        match kind {
-                            "layer" => { maps.layers.insert(h, name); },
-                            "block" => { maps.blocks.insert(h, name); },
-                            "style" => { maps.text_styles.insert(h, name); },
-                            "ltype" => { maps.linetypes.insert(h, name); },
-                            "dimstyle" => { maps.dim_styles.insert(h, name); },
-                            _ => {}
+                    Ok(Some(entry)) => {
+                        // Populate handle→name maps (needed by Pass 2)
+                        match &entry {
+                            ParsedEntry::Layer(h, data) => { maps.layers.insert(*h, data.name.clone()); },
+                            ParsedEntry::Block(h, data) => { maps.blocks.insert(*h, data.name.clone()); },
+                            ParsedEntry::Style(h, data) => { maps.text_styles.insert(*h, data.name.clone()); },
+                            ParsedEntry::Ltype(h, data) => { maps.linetypes.insert(*h, data.name.clone()); },
+                            ParsedEntry::DimStyle(h, data) => { maps.dim_styles.insert(*h, data.name.clone()); },
                         }
+                        parsed_entries.push(entry);
                     }
                     Ok(None) => {}
                     Err(_) => {
@@ -238,6 +258,154 @@ impl DwgDocumentBuilder {
                         );
                     }
                 }
+            }
+        }
+
+        // ── Post-Pass 1: Populate document tables from parsed data ─────
+        //
+        // Now that all handle→name maps are complete, create domain objects
+        // with resolved cross-references and add them to the document.
+        // Remove any default entries first to avoid duplicates.
+        for entry in &parsed_entries {
+            match entry {
+                ParsedEntry::Layer(h, data) => {
+                    let mut layer = crate::tables::Layer::new(&data.name);
+                    layer.handle = Handle::from(*h);
+                    layer.flags.frozen = data.frozen;
+                    layer.flags.off = data.off;
+                    layer.flags.locked = data.locked;
+                    layer.is_plottable = data.plottable;
+                    layer.line_weight = LineWeight::from_value(data.line_weight);
+                    layer.color = data.color;
+                    // Resolve linetype handle → name
+                    layer.line_type = maps.linetypes.get(&data.linetype_handle)
+                        .cloned()
+                        .unwrap_or_else(|| "Continuous".to_string());
+                    // Remove default entry if it exists, then add
+                    let _ = document.layers.remove(&data.name);
+                    let _ = document.layers.add(layer);
+                },
+                ParsedEntry::Block(h, data) => {
+                    let mut br = crate::tables::BlockRecord::new(&data.name);
+                    br.handle = Handle::from(*h);
+                    br.flags.anonymous = data.anonymous;
+                    br.flags.has_attributes = data.has_attributes;
+                    br.flags.is_xref = data.is_xref;
+                    br.flags.is_xref_overlay = data.is_xref_overlay;
+                    br.block_entity_handle = Handle::from(data.block_entity_handle);
+                    br.block_end_handle = Handle::from(data.endblk_handle);
+                    br.units = data.units.unwrap_or(0);
+                    br.explodable = data.explodable.unwrap_or(true);
+                    br.scale_uniformly = data.scale_uniformly.map(|v| v != 0).unwrap_or(false);
+                    if let Some(layout_h) = data.layout_handle {
+                        br.layout = Handle::from(layout_h);
+                    }
+                    // Update header handles for model/paper space
+                    if data.name.eq_ignore_ascii_case("*Model_Space") {
+                        document.header.model_space_block_handle = br.handle;
+                    } else if data.name.eq_ignore_ascii_case("*Paper_Space") {
+                        document.header.paper_space_block_handle = br.handle;
+                    }
+                    // Remove default entry if it exists, then add
+                    let _ = document.block_records.remove(&data.name);
+                    let _ = document.block_records.add(br);
+                },
+                ParsedEntry::Style(h, data) => {
+                    let mut style = crate::tables::TextStyle::new(&data.name);
+                    style.handle = Handle::from(*h);
+                    style.height = data.height;
+                    style.width_factor = data.width_factor;
+                    style.oblique_angle = data.oblique_angle;
+                    style.last_height = data.last_height;
+                    style.font_file = data.font_file.clone();
+                    style.big_font_file = data.big_font_file.clone();
+                    style.flags.backward = (data.generation & 2) != 0;
+                    style.flags.upside_down = (data.generation & 4) != 0;
+                    let _ = document.text_styles.remove(&data.name);
+                    let _ = document.text_styles.add(style);
+                },
+                ParsedEntry::Ltype(h, data) => {
+                    let mut lt = crate::tables::LineType::new(&data.name);
+                    lt.handle = Handle::from(*h);
+                    lt.description = data.description.clone();
+                    lt.pattern_length = data.pattern_length;
+                    lt.elements = data.segments.iter().map(|s| {
+                        crate::tables::LineTypeElement { length: s.length }
+                    }).collect();
+                    let _ = document.line_types.remove(&data.name);
+                    let _ = document.line_types.add(lt);
+                },
+                ParsedEntry::DimStyle(h, data) => {
+                    let mut ds = crate::tables::DimStyle::new(&data.name);
+                    ds.handle = Handle::from(*h);
+                    ds.dimscale = data.dimscale;
+                    ds.dimasz = data.dimasz;
+                    ds.dimexo = data.dimexo;
+                    ds.dimdli = data.dimdli;
+                    ds.dimexe = data.dimexe;
+                    ds.dimrnd = data.dimrnd;
+                    ds.dimdle = data.dimdle;
+                    ds.dimtp = data.dimtp;
+                    ds.dimtm = data.dimtm;
+                    ds.dimtol = data.dimtol;
+                    ds.dimlim = data.dimlim;
+                    ds.dimtih = data.dimtih;
+                    ds.dimtoh = data.dimtoh;
+                    ds.dimse1 = data.dimse1;
+                    ds.dimse2 = data.dimse2;
+                    ds.dimtad = data.dimtad;
+                    ds.dimzin = data.dimzin;
+                    ds.dimtxt = data.dimtxt;
+                    ds.dimcen = data.dimcen;
+                    ds.dimtsz = data.dimtsz;
+                    ds.dimaltf = data.dimaltf;
+                    ds.dimlfac = data.dimlfac;
+                    ds.dimtvp = data.dimtvp;
+                    ds.dimtfac = data.dimtfac;
+                    ds.dimgap = data.dimgap;
+                    ds.dimalt = data.dimalt;
+                    ds.dimaltd = data.dimaltd;
+                    ds.dimtofl = data.dimtofl;
+                    ds.dimsah = data.dimsah;
+                    ds.dimtix = data.dimtix;
+                    ds.dimsoxd = data.dimsoxd;
+                    ds.dimclrd = data.dimclrd.index().unwrap_or(0) as i16;
+                    ds.dimclre = data.dimclre.index().unwrap_or(0) as i16;
+                    ds.dimclrt = data.dimclrt.index().unwrap_or(0) as i16;
+                    ds.dimsd1 = data.dimsd1;
+                    ds.dimsd2 = data.dimsd2;
+                    ds.dimtolj = data.dimtolj;
+                    ds.dimtzin = data.dimtzin;
+                    ds.dimupt = data.dimupt;
+                    ds.dimfit = data.dimfit;
+                    ds.dimlwd = data.dimlwd;
+                    ds.dimlwe = data.dimlwe;
+                    ds.dimpost = data.dimpost.clone();
+                    ds.dimapost = data.dimapost.clone();
+                    ds.dimaltrnd = data.dimaltrnd;
+                    ds.dimadec = data.dimadec;
+                    ds.dimdec = data.dimdec;
+                    ds.dimtdec = data.dimtdec;
+                    ds.dimaltu = data.dimaltu;
+                    ds.dimalttd = data.dimalttd;
+                    ds.dimaunit = data.dimaunit;
+                    ds.dimfrac = data.dimfrac;
+                    ds.dimlunit = data.dimlunit;
+                    ds.dimdsep = data.dimdsep;
+                    ds.dimtmove = data.dimtmove;
+                    ds.dimjust = data.dimjust;
+                    ds.dimaltz = data.dimaltz;
+                    ds.dimalttz = data.dimalttz;
+                    // Resolve text style handle
+                    if data.dimtxsty_handle != 0 {
+                        ds.dimtxsty_handle = Handle::from(data.dimtxsty_handle);
+                        ds.dimtxsty = maps.text_styles.get(&data.dimtxsty_handle)
+                            .cloned()
+                            .unwrap_or_else(|| "Standard".to_string());
+                    }
+                    let _ = document.dim_styles.remove(&data.name);
+                    let _ = document.dim_styles.add(ds);
+                },
             }
         }
 

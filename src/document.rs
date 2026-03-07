@@ -1297,9 +1297,25 @@ impl CadDocument {
             entity.common_mut().owner_handle = ms_handle;
         }
 
-        // Also add to *Model_Space block record (DWG writer reads from here)
-        if let Some(ms) = self.block_records.get_mut("*Model_Space") {
-            ms.entities.push(entity.clone());
+        // Route entity to the correct block record based on owner handle.
+        // The DWG writer reads entities from BlockRecord.entities, so each
+        // entity must be placed in the block record it belongs to.
+        let owner = entity.common().owner_handle;
+        let mut added_to_block = false;
+        if !owner.is_null() {
+            for br in self.block_records.iter_mut() {
+                if br.handle == owner {
+                    br.entities.push(entity.clone());
+                    added_to_block = true;
+                    break;
+                }
+            }
+        }
+        // Fallback: add to *Model_Space if owner didn't match any block record
+        if !added_to_block {
+            if let Some(ms) = self.block_records.get_mut("*Model_Space") {
+                ms.entities.push(entity.clone());
+            }
         }
 
         // Store in the flat entity map (DXF writer reads from here)

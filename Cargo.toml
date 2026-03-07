@@ -61,5 +61,9 @@ codegen-units = 1
 [profile.bench]
 inherits = "release"
 
+[[example]]
+name = "serde_json"
+required-features = ["serde"]
+
 
 
