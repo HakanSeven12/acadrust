@@ -40,6 +40,7 @@ pub mod mline;
 pub mod mesh;
 pub mod raster_image;
 pub mod solid3d;
+pub mod acis;
 pub mod table;
 pub mod tolerance;
 pub mod polyface_mesh;

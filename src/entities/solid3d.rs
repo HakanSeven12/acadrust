@@ -303,6 +303,21 @@ impl AcisData {
             self.sat_data.len()
         }
     }
+
+    /// Parses the SAT text data into a structured [`SatDocument`].
+    ///
+    /// Returns `None` if the data is empty or binary (SAB).
+    pub fn parse_sat(&self) -> Option<crate::entities::acis::SatDocument> {
+        if self.is_binary || self.sat_data.is_empty() {
+            return None;
+        }
+        crate::entities::acis::SatDocument::parse(&self.sat_data).ok()
+    }
+
+    /// Creates ACIS data from a [`SatDocument`].
+    pub fn from_sat_document(doc: &crate::entities::acis::SatDocument) -> Self {
+        Self::from_sat(&doc.to_sat_string())
+    }
 }
 
 impl Default for AcisData {
@@ -400,6 +415,34 @@ impl Solid3D {
     /// Returns true if this solid has valid ACIS data.
     pub fn has_acis_data(&self) -> bool {
         self.acis_data.has_data()
+    }
+
+    /// Parses the raw SAT text data into a structured [`SatDocument`].
+    ///
+    /// Returns `None` if the ACIS data is empty or binary (SAB).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let solid = Solid3D::from_sat("700 0 1 0\n...");
+    /// if let Some(doc) = solid.parse_sat() {
+    ///     for face in doc.faces() {
+    ///         println!("Face sense: {:?}", face.sense());
+    ///     }
+    /// }
+    /// ```
+    pub fn parse_sat(&self) -> Option<crate::entities::acis::SatDocument> {
+        if self.acis_data.is_binary || self.acis_data.sat_data.is_empty() {
+            return None;
+        }
+        crate::entities::acis::SatDocument::parse(&self.acis_data.sat_data).ok()
+    }
+
+    /// Generates SAT text from a [`SatDocument`] and stores it in this entity.
+    ///
+    /// This replaces any existing ACIS data with text SAT format data.
+    pub fn set_sat_document(&mut self, doc: &crate::entities::acis::SatDocument) {
+        self.acis_data = AcisData::from_sat(&doc.to_sat_string());
     }
 
     /// Returns the ACIS data size.
@@ -631,6 +674,21 @@ impl Region {
         self.acis_data.has_data()
     }
 
+    /// Parses the raw SAT text data into a structured [`SatDocument`].
+    ///
+    /// Returns `None` if the ACIS data is empty or binary (SAB).
+    pub fn parse_sat(&self) -> Option<crate::entities::acis::SatDocument> {
+        if self.acis_data.is_binary || self.acis_data.sat_data.is_empty() {
+            return None;
+        }
+        crate::entities::acis::SatDocument::parse(&self.acis_data.sat_data).ok()
+    }
+
+    /// Generates SAT text from a [`SatDocument`] and stores it in this entity.
+    pub fn set_sat_document(&mut self, doc: &crate::entities::acis::SatDocument) {
+        self.acis_data = AcisData::from_sat(&doc.to_sat_string());
+    }
+
     /// Adds a wireframe edge.
     pub fn add_wire(&mut self, wire: Wire) {
         self.wires.push(wire);
@@ -788,6 +846,21 @@ impl Body {
     /// Returns true if this body has valid ACIS data.
     pub fn has_acis_data(&self) -> bool {
         self.acis_data.has_data()
+    }
+
+    /// Parses the raw SAT text data into a structured [`SatDocument`].
+    ///
+    /// Returns `None` if the ACIS data is empty or binary (SAB).
+    pub fn parse_sat(&self) -> Option<crate::entities::acis::SatDocument> {
+        if self.acis_data.is_binary || self.acis_data.sat_data.is_empty() {
+            return None;
+        }
+        crate::entities::acis::SatDocument::parse(&self.acis_data.sat_data).ok()
+    }
+
+    /// Generates SAT text from a [`SatDocument`] and stores it in this entity.
+    pub fn set_sat_document(&mut self, doc: &crate::entities::acis::SatDocument) {
+        self.acis_data = AcisData::from_sat(&doc.to_sat_string());
     }
 
     /// Adds a wireframe edge.
@@ -1073,6 +1146,119 @@ mod tests {
 
         assert_eq!(solid.wire_count(), 0);
         assert!(solid.silhouettes.is_empty());
+    }
+
+    #[test]
+    fn test_solid3d_parse_sat() {
+        let sat_text = "700 0 1 0\n\
+            @8 acadrust @8 ACIS 7.0 @24 Thu Jan 01 00:00:00 2023\n\
+            1e-06 9.9999999999999995e-07\n\
+            -0 asmheader $-1 -1 @12 700 7 0 0 @5 ACIS @3 7.0 @24 Thu Jan 01 00:00:00 2023 #\n\
+            -1 body $-1 $2 $-1 $-1 #\n\
+            -2 lump $-1 $-1 $3 $1 #\n\
+            -3 shell $-1 $-1 $-1 $4 $-1 $2 #\n\
+            -4 face $-1 $-1 $5 $3 $-1 $6 forward single #\n\
+            -5 loop $-1 $-1 $-1 $4 #\n\
+            -6 plane-surface $-1 0 0 5 0 0 1 1 0 0 forward_v I I I I #\n\
+            End-of-ACIS-data\n";
+
+        let solid = Solid3D::from_sat(sat_text);
+        assert!(solid.has_acis_data());
+
+        let doc = solid.parse_sat().unwrap();
+        assert_eq!(doc.header.version, crate::entities::acis::SatVersion::V7_0);
+        assert_eq!(doc.records.len(), 7);
+
+        // Check body
+        let bodies = doc.bodies();
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].lump(), crate::entities::acis::SatPointer::new(2));
+
+        // Check faces
+        let faces = doc.faces();
+        assert_eq!(faces.len(), 1);
+        assert_eq!(
+            faces[0].sense(),
+            crate::entities::acis::Sense::Forward
+        );
+
+        // Check plane surface
+        let planes = doc.records_of_type("plane-surface");
+        assert_eq!(planes.len(), 1);
+        let plane = crate::entities::acis::SatPlaneSurface::from_record(planes[0]).unwrap();
+        assert_eq!(plane.root_point(), (0.0, 0.0, 5.0));
+        assert_eq!(plane.normal(), (0.0, 0.0, 1.0));
+    }
+
+    #[test]
+    fn test_solid3d_set_sat_document() {
+        let mut doc = crate::entities::acis::SatDocument::new_body();
+        doc.add_plane_surface(
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 0.0, 0.0],
+        );
+
+        let mut solid = Solid3D::new();
+        solid.set_sat_document(&doc);
+
+        assert!(solid.has_acis_data());
+        assert!(!solid.acis_data.is_binary);
+        assert!(solid.acis_data.sat_data.contains("plane-surface"));
+        assert!(solid.acis_data.sat_data.contains("700"));
+
+        // Roundtrip: parse back
+        let doc2 = solid.parse_sat().unwrap();
+        assert_eq!(doc2.records.len(), doc.records.len());
+    }
+
+    #[test]
+    fn test_region_parse_sat() {
+        let sat_text = "700 0 1 0\n\
+            @8 acadrust @8 ACIS 7.0 @24 Thu Jan 01 00:00:00 2023\n\
+            1e-06 9.9999999999999995e-07\n\
+            -0 asmheader $-1 -1 @12 700 7 0 0 @5 ACIS @3 7.0 @24 Thu Jan 01 00:00:00 2023 #\n\
+            -1 body $-1 $-1 $-1 $-1 #\n\
+            End-of-ACIS-data\n";
+
+        let region = Region::from_sat(sat_text);
+        let doc = region.parse_sat().unwrap();
+        assert_eq!(doc.records.len(), 2);
+    }
+
+    #[test]
+    fn test_body_parse_sat() {
+        let sat_text = "700 0 1 0\n\
+            @8 acadrust @8 ACIS 7.0 @24 Thu Jan 01 00:00:00 2023\n\
+            1e-06 9.9999999999999995e-07\n\
+            -0 asmheader $-1 -1 @12 700 7 0 0 @5 ACIS @3 7.0 @24 Thu Jan 01 00:00:00 2023 #\n\
+            -1 body $-1 $-1 $-1 $-1 #\n\
+            End-of-ACIS-data\n";
+
+        let body = Body::from_sat(sat_text);
+        let doc = body.parse_sat().unwrap();
+        assert_eq!(doc.records.len(), 2);
+    }
+
+    #[test]
+    fn test_acis_data_from_sat_document() {
+        let doc = crate::entities::acis::SatDocument::new_body();
+        let acis = AcisData::from_sat_document(&doc);
+        assert!(acis.has_data());
+        assert!(!acis.is_binary);
+        assert!(acis.sat_data.contains("body"));
+    }
+
+    #[test]
+    fn test_solid3d_parse_sat_binary_returns_none() {
+        let solid = Solid3D::from_sab(b"ACIS BinaryFile".to_vec());
+        assert!(solid.parse_sat().is_none());
+    }
+
+    #[test]
+    fn test_solid3d_parse_sat_empty_returns_none() {
+        let solid = Solid3D::new();
+        assert!(solid.parse_sat().is_none());
     }
 }
 
