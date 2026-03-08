@@ -128,28 +128,165 @@ fn uses_paged_format(version: DxfVersion) -> bool {
     version >= DxfVersion::AC1018
 }
 
-/// Correct the `handle_seed` (HANDSEED) so it exceeds the maximum handle
-/// in the object handle map.  AutoCAD rejects files where HANDSEED is ≤ the
-/// highest allocated handle.
+/// Prepare the header for writing by synchronizing all handle references
+/// from the actual document objects and correcting the handle seed.
+///
+/// This is critical because after a DWG read-roundtrip, header handle
+/// references may be NULL (the header reader for R2007+ doesn't correctly
+/// read handles from the three-stream merged format). Without syncing,
+/// the header would write NULL handles for table controls and the root
+/// dictionary, causing IntelliCAD (and other CAD apps) to report
+/// "null object id" for every object.
 ///
 /// Also updates EXTMIN/EXTMAX from the computed model-space extents so that
 /// "Zoom Extents" works correctly when the file is first opened.
-fn correct_handle_seed(
-    header: &HeaderVariables,
+fn prepare_header(
+    document: &CadDocument,
     handle_map: &[(u64, u32)],
     extents: &Option<crate::types::BoundingBox3D>,
 ) -> HeaderVariables {
-    let max_handle = handle_map.iter().map(|&(h, _)| h).max().unwrap_or(0);
-    let mut corrected = header.clone();
-    if corrected.handle_seed <= max_handle {
-        corrected.handle_seed = max_handle + 1;
+    let mut h = document.header.clone();
+
+    // ── Sync table control handles from actual table objects ──
+    // The tables always have valid handles from initialize_defaults(),
+    // but the header might have NULL handles after a DWG read.
+    h.block_control_handle = document.block_records.handle();
+    h.layer_control_handle = document.layers.handle();
+    h.style_control_handle = document.text_styles.handle();
+    h.linetype_control_handle = document.line_types.handle();
+    h.view_control_handle = document.views.handle();
+    h.ucs_control_handle = document.ucss.handle();
+    h.vport_control_handle = document.vports.handle();
+    h.appid_control_handle = document.app_ids.handle();
+    h.dimstyle_control_handle = document.dim_styles.handle();
+
+    // ── Sync root dictionary handle ──
+    // Find the root dictionary by scanning document.objects for a
+    // Dictionary with owner == NULL. Prefer non-0x0C handles (file's
+    // root dict) over the initialize_defaults() one.
+    if h.named_objects_dict_handle.is_null() {
+        h.named_objects_dict_handle = find_root_dict_handle(&document.objects);
     }
-    // Update model-space extents from computed entity bounding boxes
+    // Verify the root dict handle actually exists in objects
+    if !h.named_objects_dict_handle.is_null() && !document.objects.contains_key(&h.named_objects_dict_handle) {
+        // Handle points to nonexistent object — try to find the real root dict
+        h.named_objects_dict_handle = find_root_dict_handle(&document.objects);
+    }
+
+    // ── Sync child dictionary handles from root dict entries ──
+    if let Some(crate::objects::ObjectType::Dictionary(root_dict)) =
+        document.objects.get(&h.named_objects_dict_handle)
+    {
+        if let Some(handle) = root_dict.get("ACAD_GROUP") {
+            h.acad_group_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_MLINESTYLE") {
+            h.acad_mlinestyle_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_LAYOUT") {
+            h.acad_layout_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_PLOTSETTINGS") {
+            h.acad_plotsettings_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_PLOTSTYLENAME") {
+            h.acad_plotstylename_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_MATERIAL") {
+            h.acad_material_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_COLOR") {
+            h.acad_color_dict_handle = handle;
+        }
+        if let Some(handle) = root_dict.get("ACAD_VISUALSTYLE") {
+            h.acad_visualstyle_dict_handle = handle;
+        }
+    }
+
+    // ── Sync linetype handles by name ──
+    if let Some(lt) = document.line_types.get("ByLayer") {
+        h.bylayer_linetype_handle = lt.handle;
+    }
+    if let Some(lt) = document.line_types.get("ByBlock") {
+        h.byblock_linetype_handle = lt.handle;
+    }
+    if let Some(lt) = document.line_types.get("Continuous") {
+        h.continuous_linetype_handle = lt.handle;
+    }
+
+    // ── Sync model/paper space block handles ──
+    if let Some(br) = document.block_records.get("*Model_Space") {
+        h.model_space_block_handle = br.handle;
+    }
+    if let Some(br) = document.block_records.get("*Paper_Space") {
+        h.paper_space_block_handle = br.handle;
+    }
+
+    // ── Sync current style handles (if NULL, resolve from defaults) ──
+    if h.current_layer_handle.is_null() {
+        if let Some(layer) = document.layers.get("0") {
+            h.current_layer_handle = layer.handle;
+        }
+    }
+    if h.current_text_style_handle.is_null() {
+        if let Some(style) = document.text_styles.get("Standard") {
+            h.current_text_style_handle = style.handle;
+        }
+    }
+    if h.current_dimstyle_handle.is_null() {
+        if let Some(ds) = document.dim_styles.get("Standard") {
+            h.current_dimstyle_handle = ds.handle;
+        }
+    }
+    if h.current_linetype_handle.is_null() {
+        h.current_linetype_handle = h.bylayer_linetype_handle;
+    }
+
+    // ── Correct HANDSEED ──
+    let max_handle = handle_map.iter().map(|&(ha, _)| ha).max().unwrap_or(0);
+    if h.handle_seed <= max_handle {
+        h.handle_seed = max_handle + 1;
+    }
+
+    // ── Update model-space extents ──
     if let Some(ref ext) = extents {
-        corrected.model_space_extents_min = ext.min;
-        corrected.model_space_extents_max = ext.max;
+        h.model_space_extents_min = ext.min;
+        h.model_space_extents_max = ext.max;
     }
-    corrected
+
+    h
+}
+
+/// Find the root dictionary handle by scanning the objects map.
+///
+/// The root dictionary is a Dictionary with `owner == Handle::NULL`.
+/// If multiple candidates exist (e.g., from `initialize_defaults` and
+/// from file data), prefer the one with more entries (the file's root dict).
+fn find_root_dict_handle(
+    objects: &std::collections::HashMap<crate::types::Handle, crate::objects::ObjectType>,
+) -> crate::types::Handle {
+    use crate::objects::ObjectType;
+    use crate::types::Handle;
+
+    let mut best_handle = Handle::NULL;
+    let mut best_entry_count = 0usize;
+
+    for (handle, obj) in objects {
+        if let ObjectType::Dictionary(dict) = obj {
+            if dict.owner.is_null() {
+                // Prefer the dictionary with more entries (richer = file's root dict);
+                // on tie, prefer higher handle (likely from file, not initialize_defaults)
+                if dict.entries.len() > best_entry_count
+                    || (dict.entries.len() == best_entry_count && handle.value() > best_handle.value())
+                {
+                    best_handle = *handle;
+                    best_entry_count = dict.entries.len();
+                }
+            }
+        }
+    }
+
+    best_handle
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -167,11 +304,10 @@ fn write_ac15<W: Write + Seek>(
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents) = obj_writer.write();
 
-    // ── Phase 2: Compute correct HANDSEED + EXTMIN/EXTMAX ──
-    // AutoCAD rejects files where HANDSEED ≤ max(object handles).
-    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32, &extents);
+    // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
+    let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
-    // ── Section: Header (uses corrected HANDSEED) ──
+    // ── Section: Header (uses synced + corrected header) ──
     let header_data = header_writer::write_header(version, &corrected_header);
     fhw.add_section(section_names::HEADER, header_data);
 
@@ -235,10 +371,10 @@ fn write_ac18<W: Write + Seek>(
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents) = obj_writer.write();
 
-    // ── Phase 2: Compute correct HANDSEED + EXTMIN/EXTMAX ──
-    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32, &extents);
+    // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
+    let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
-    // ── Section: Header (uses corrected HANDSEED) ──
+    // ── Section: Header (uses synced + corrected header) ──
     let header_data = header_writer::write_header(version, &corrected_header);
     fhw.add_section(output, section_names::HEADER, &header_data, true, PAGE_SIZE)?;
 
@@ -329,8 +465,8 @@ fn write_ac21_impl<W: Write + Seek>(
     let obj_writer = DwgObjectWriter::new(document)?;
     let (obj_data, handle_map_u32, extents) = obj_writer.write();
 
-    // ── Phase 2: Compute correct HANDSEED + EXTMIN/EXTMAX ──
-    let corrected_header = correct_handle_seed(&document.header, &handle_map_u32, &extents);
+    // ── Phase 2: Prepare header (sync handles + correct HANDSEED) ──
+    let corrected_header = prepare_header(document, &handle_map_u32, &extents);
 
     // ── Sections in spec §5.1 stream order ──
     // AC21 add_section looks up encoding/encryption/page_size automatically
@@ -536,7 +672,7 @@ fn build_rev_history() -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::document::CadDocument;
-    use crate::types::DxfVersion;
+    use crate::types::{DxfVersion, Handle};
 
     #[test]
     fn test_validate_version_r2007_ok() {
@@ -710,5 +846,121 @@ mod tests {
         let bytes = DwgWriter::write_to_vec(&doc2).unwrap();
         // Verify non-trivial output
         assert!(bytes.len() > 200, "DWG file should be non-trivial");
+    }
+
+    #[test]
+    fn test_prepare_header_syncs_null_handles() {
+        // Simulate the bug: create a document and zero out all header handles
+        // (as would happen after reading a DWG with a broken header reader).
+        let mut doc = CadDocument::new();
+        doc.version = DxfVersion::AC1015;
+
+        // Save correct handles for later verification
+        let correct_block_control = doc.block_records.handle();
+        let correct_layer_control = doc.layers.handle();
+        let correct_style_control = doc.text_styles.handle();
+        let correct_ltype_control = doc.line_types.handle();
+        let correct_view_control = doc.views.handle();
+        let correct_ucs_control = doc.ucss.handle();
+        let correct_vport_control = doc.vports.handle();
+        let correct_appid_control = doc.app_ids.handle();
+        let correct_dimstyle_control = doc.dim_styles.handle();
+        let correct_root_dict = doc.header.named_objects_dict_handle;
+
+        // Zero out all header handles (simulate the reader bug)
+        doc.header.block_control_handle = Handle::NULL;
+        doc.header.layer_control_handle = Handle::NULL;
+        doc.header.style_control_handle = Handle::NULL;
+        doc.header.linetype_control_handle = Handle::NULL;
+        doc.header.view_control_handle = Handle::NULL;
+        doc.header.ucs_control_handle = Handle::NULL;
+        doc.header.vport_control_handle = Handle::NULL;
+        doc.header.appid_control_handle = Handle::NULL;
+        doc.header.dimstyle_control_handle = Handle::NULL;
+        doc.header.named_objects_dict_handle = Handle::NULL;
+        doc.header.acad_group_dict_handle = Handle::NULL;
+        doc.header.acad_mlinestyle_dict_handle = Handle::NULL;
+        doc.header.acad_layout_dict_handle = Handle::NULL;
+        doc.header.bylayer_linetype_handle = Handle::NULL;
+        doc.header.byblock_linetype_handle = Handle::NULL;
+        doc.header.continuous_linetype_handle = Handle::NULL;
+        doc.header.current_layer_handle = Handle::NULL;
+        doc.header.current_text_style_handle = Handle::NULL;
+        doc.header.current_dimstyle_handle = Handle::NULL;
+        doc.header.current_linetype_handle = Handle::NULL;
+
+        // prepare_header should sync all handles from document objects
+        let handle_map = vec![(1u64, 0u32), (2, 100), (3, 200)]; // dummy
+        let prepared = prepare_header(&doc, &handle_map, &None);
+
+        // Table control handles must be synced from the actual table objects
+        assert_eq!(prepared.block_control_handle, correct_block_control,
+            "block_control_handle should be synced from block_records.handle()");
+        assert_eq!(prepared.layer_control_handle, correct_layer_control,
+            "layer_control_handle should be synced from layers.handle()");
+        assert_eq!(prepared.style_control_handle, correct_style_control,
+            "style_control_handle should be synced from text_styles.handle()");
+        assert_eq!(prepared.linetype_control_handle, correct_ltype_control,
+            "linetype_control_handle should be synced from line_types.handle()");
+        assert_eq!(prepared.view_control_handle, correct_view_control,
+            "view_control_handle should be synced from views.handle()");
+        assert_eq!(prepared.ucs_control_handle, correct_ucs_control,
+            "ucs_control_handle should be synced from ucss.handle()");
+        assert_eq!(prepared.vport_control_handle, correct_vport_control,
+            "vport_control_handle should be synced from vports.handle()");
+        assert_eq!(prepared.appid_control_handle, correct_appid_control,
+            "appid_control_handle should be synced from app_ids.handle()");
+        assert_eq!(prepared.dimstyle_control_handle, correct_dimstyle_control,
+            "dimstyle_control_handle should be synced from dim_styles.handle()");
+
+        // Root dictionary must be found
+        assert_eq!(prepared.named_objects_dict_handle, correct_root_dict,
+            "named_objects_dict_handle should be found by scanning objects");
+        assert!(!prepared.named_objects_dict_handle.is_null(),
+            "named_objects_dict_handle must not be NULL");
+
+        // Dict handles from root dict entries must be resolved
+        assert!(!prepared.acad_group_dict_handle.is_null(),
+            "acad_group_dict_handle must be resolved from root dict");
+        assert!(!prepared.acad_mlinestyle_dict_handle.is_null(),
+            "acad_mlinestyle_dict_handle must be resolved from root dict");
+        assert!(!prepared.acad_layout_dict_handle.is_null(),
+            "acad_layout_dict_handle must be resolved from root dict");
+
+        // Linetype handles must be resolved
+        assert!(!prepared.bylayer_linetype_handle.is_null(),
+            "bylayer_linetype_handle must be resolved");
+        assert!(!prepared.byblock_linetype_handle.is_null(),
+            "byblock_linetype_handle must be resolved");
+        assert!(!prepared.continuous_linetype_handle.is_null(),
+            "continuous_linetype_handle must be resolved");
+
+        // Current style handles must be resolved
+        assert!(!prepared.current_layer_handle.is_null(),
+            "current_layer_handle must be resolved");
+        assert!(!prepared.current_text_style_handle.is_null(),
+            "current_text_style_handle must be resolved");
+        assert!(!prepared.current_dimstyle_handle.is_null(),
+            "current_dimstyle_handle must be resolved");
+        assert!(!prepared.current_linetype_handle.is_null(),
+            "current_linetype_handle must be resolved (default to ByLayer)");
+    }
+
+    #[test]
+    fn test_prepare_header_null_handles_write_produces_valid_dwg() {
+        // Simulate bug and verify the written DWG file is still valid
+        let mut doc = CadDocument::new();
+        doc.version = DxfVersion::AC1015;
+
+        // Zero out all header handles
+        doc.header.block_control_handle = Handle::NULL;
+        doc.header.layer_control_handle = Handle::NULL;
+        doc.header.named_objects_dict_handle = Handle::NULL;
+
+        // Writing should succeed (prepare_header syncs handles)
+        let result = DwgWriter::write_to_vec(&doc);
+        assert!(result.is_ok(), "Writing with NULL headers should succeed after sync");
+        let bytes = result.unwrap();
+        assert!(bytes.len() > 200, "Output should be non-trivial");
     }
 }

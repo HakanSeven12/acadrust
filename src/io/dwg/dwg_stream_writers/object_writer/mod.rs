@@ -95,8 +95,14 @@ impl<'a> DwgObjectWriter<'a> {
             self.output.extend_from_slice(&0x0DCAi32.to_le_bytes());
         }
 
-        // Enqueue root dictionary for later
-        let root_dict_handle = self.document.header.named_objects_dict_handle;
+        // Enqueue root dictionary for later.
+        // If the header handle is NULL (e.g., after a DWG read where the
+        // header reader failed to parse handles), scan document.objects to
+        // find the root dictionary (a Dictionary with owner == NULL).
+        let mut root_dict_handle = self.document.header.named_objects_dict_handle;
+        if root_dict_handle.is_null() {
+            root_dict_handle = self.find_root_dict_handle();
+        }
         if !root_dict_handle.is_null() {
             self.object_queue.push_back(root_dict_handle);
         }
@@ -154,6 +160,31 @@ impl<'a> DwgObjectWriter<'a> {
         self.write_objects();
 
         (self.output, self.handle_map, self.model_space_extents)
+    }
+
+    /// Find the root dictionary handle by scanning document.objects.
+    ///
+    /// The root dictionary is a Dictionary with `owner == Handle::NULL`.
+    /// If multiple candidates exist, prefer the one with the most entries.
+    fn find_root_dict_handle(&self) -> Handle {
+        let mut best_handle = Handle::NULL;
+        let mut best_entry_count = 0usize;
+
+        for (handle, obj) in &self.document.objects {
+            if let crate::objects::ObjectType::Dictionary(dict) = obj {
+                if dict.owner.is_null() {
+                    if dict.entries.len() > best_entry_count
+                        || (dict.entries.len() == best_entry_count
+                            && handle.value() > best_handle.value())
+                    {
+                        best_handle = *handle;
+                        best_entry_count = dict.entries.len();
+                    }
+                }
+            }
+        }
+
+        best_handle
     }
 
     /// Compute the bounding box of all entities in the *Model_Space block.
