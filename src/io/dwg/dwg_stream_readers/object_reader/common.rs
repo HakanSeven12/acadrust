@@ -103,6 +103,7 @@ pub const OBJ_LAYOUT: i16 = 82;             // 0x52 — fixed non-entity
 pub const OBJ_IMAGE: i16 = -1;
 pub const OBJ_MESH: i16 = -2;
 pub const OBJ_MULTILEADER: i16 = -3;
+pub const OBJ_WIPEOUT: i16 = -4;
 
 // Class-based non-entity objects — also resolved via class mapping for
 // portable type codes.  The values here match ACadSharp's ObjectType.
@@ -124,9 +125,10 @@ pub const OBJ_TABLESTYLE: i16 = 0x6A;       // 106
 pub fn is_entity_type(type_code: i16) -> bool {
     // Fixed entity types: 1–47, 74 (OLE2FRAME), 77 (LWPOLYLINE), 78 (HATCH)
     // EXCEPT: 42 (OBJ_DICTIONARY) is a non-graphical object, not an entity.
-    // Class-based entity sentinels: -3 (MULTILEADER), -2 (MESH), -1 (IMAGE)
-    // Class-based entity types: ≥500 (resolved from DXF class section)
-    matches!(type_code, -3..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78) || type_code >= 500
+    // Class-based entity sentinels: -4..-1 (WIPEOUT, MULTILEADER, MESH, IMAGE)
+    // Class-based entity types (≥500) are NOT included here; the builder
+    // checks the class's is_an_entity flag directly.
+    matches!(type_code, -4..=-1 | 1..=41 | 43..=47 | 74 | 77 | 78)
 }
 
 /// Returns true if the type code is a table control or entry.
@@ -143,7 +145,8 @@ pub fn dxf_name_to_type_code(dxf_name: &str) -> Option<i16> {
         // Entities
         "LWPOLYLINE" => Some(OBJ_LWPOLYLINE),
         "HATCH" => Some(OBJ_HATCH),
-        "IMAGE" | "WIPEOUT" => Some(OBJ_IMAGE),
+        "IMAGE" => Some(OBJ_IMAGE),
+        "WIPEOUT" => Some(OBJ_WIPEOUT),
         "MESH" => Some(OBJ_MESH),
         "MULTILEADER" => Some(OBJ_MULTILEADER),
         "OLE2FRAME" => Some(OBJ_OLE2FRAME),

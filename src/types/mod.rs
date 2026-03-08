@@ -72,17 +72,17 @@ impl DxfVersion {
         self.as_str()
     }
 
-    /// Parse version from string (e.g., "AC1015")
+    /// Parse version from string (e.g., "AC1015" or "AD1015")
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "AC1012" => Some(DxfVersion::AC1012),
-            "AC1014" => Some(DxfVersion::AC1014),
-            "AC1015" => Some(DxfVersion::AC1015),
-            "AC1018" => Some(DxfVersion::AC1018),
-            "AC1021" => Some(DxfVersion::AC1021),
-            "AC1024" => Some(DxfVersion::AC1024),
-            "AC1027" => Some(DxfVersion::AC1027),
-            "AC1032" => Some(DxfVersion::AC1032),
+            "AC1012" | "AD1012" => Some(DxfVersion::AC1012),
+            "AC1014" | "AD1014" => Some(DxfVersion::AC1014),
+            "AC1015" | "AD1015" => Some(DxfVersion::AC1015),
+            "AC1018" | "AD1018" => Some(DxfVersion::AC1018),
+            "AC1021" | "AD1021" => Some(DxfVersion::AC1021),
+            "AC1024" | "AD1024" => Some(DxfVersion::AC1024),
+            "AC1027" | "AD1027" => Some(DxfVersion::AC1027),
+            "AC1032" | "AD1032" => Some(DxfVersion::AC1032),
             _ => None,
         }
     }

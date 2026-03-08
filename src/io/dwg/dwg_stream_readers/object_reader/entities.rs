@@ -2057,6 +2057,181 @@ fn read_leader_line(
 }
 
 // ════════════════════════════════════════════════════════════════════════
+//  ACIS / Modeler-geometry readers (3DSOLID, REGION, BODY)
+// ════════════════════════════════════════════════════════════════════════
+
+/// Data returned by the ACIS entity reader (shared between 3DSOLID, REGION, BODY).
+#[derive(Debug, Clone)]
+pub struct AcisEntityData {
+    /// True when the entity carries no ACIS data (empty body).
+    pub acis_empty: bool,
+    /// SAT text data (version 1, pre-R2007).
+    pub sat_data: String,
+    /// SAB binary data (version 2, R2007+).
+    pub sab_data: Vec<u8>,
+    /// Whether the data is binary SAB (true) or text SAT (false).
+    pub is_binary: bool,
+    /// ACIS version marker as read from the stream.
+    pub version: i16,
+    /// Point on entity (wireframe anchor), if wireframe data was present.
+    pub point: Vector3,
+    /// Whether the entity has a history handle (3DSOLID only, R2007+).
+    pub has_history: bool,
+}
+
+/// Decrypt SAT text encoded in a DWG stream.
+///
+/// Pre-R2007 DWG files encode SAT text with a simple byte-rotation cipher:
+/// `decoded[i] = (encoded[i] - (i & 0xFF)) & 0xFF`.
+fn decrypt_sat_data(encoded: &[u8]) -> String {
+    let mut decoded = Vec::with_capacity(encoded.len());
+    for (i, &b) in encoded.iter().enumerate() {
+        decoded.push(b.wrapping_sub((i & 0xFF) as u8));
+    }
+    String::from_utf8_lossy(&decoded).to_string()
+}
+
+/// Read modeler-geometry (ACIS) data shared by 3DSOLID, REGION, BODY.
+///
+/// Entity-type-specific data (e.g. history handle for 3DSOLID) is NOT
+/// read here — the caller must handle that.
+pub fn read_acis_entity(
+    reader: &mut DwgMergedReader,
+    version: DwgVersion,
+) -> AcisEntityData {
+    let acis_empty = reader.read_bit();
+
+    if acis_empty {
+        return AcisEntityData {
+            acis_empty: true,
+            sat_data: String::new(),
+            sab_data: Vec::new(),
+            is_binary: false,
+            version: 0,
+            point: Vector3::ZERO,
+            has_history: false,
+        };
+    }
+
+    let acis_version = reader.read_bit_short();
+    let mut sat_data = String::new();
+    let mut sab_data = Vec::new();
+    let is_binary;
+
+    if acis_version == 1 {
+        // SAT text — pre-R2007
+        // Read the total data size, then the encrypted byte block.
+        is_binary = false;
+
+        if version.r2004_plus() {
+            // R2004+: a single BL for total byte count, then raw bytes
+            let num_bytes = reader.read_bit_long().max(0) as usize;
+            if num_bytes > 0 {
+                let enc = reader.read_bytes(num_bytes);
+                sat_data = decrypt_sat_data(&enc);
+            }
+        } else {
+            // R13-R2000: read individual text lines until "End-of-…"
+            loop {
+                let line = reader.read_variable_text();
+                if line.is_empty()
+                    || line.starts_with("End-of-ACIS-data")
+                    || line.starts_with("End-of-ASM-data")
+                {
+                    break;
+                }
+                sat_data.push_str(&line);
+                sat_data.push('\n');
+            }
+        }
+    } else {
+        // SAB binary — R2007+
+        is_binary = true;
+        let total_size = reader.read_bit_long().max(0) as usize;
+        if total_size > 0 && total_size < 50_000_000 {
+            sab_data = reader.read_bytes(total_size);
+        }
+    }
+
+    // Wireframe data
+    let wireframe_present = reader.read_bit();
+    let mut point = Vector3::ZERO;
+
+    if wireframe_present {
+        point = reader.read_3bit_double();
+        let num_isolines = safe_count(reader.read_bit_long());
+        for _ in 0..num_isolines {
+            // Each isoline: acis_index (BL), wire_type (RC),
+            // selection_marker (BL), color (BL), num_points (BL),
+            // 3BD × num_points, has_transform (B), if has_transform: transform data
+            let _acis_index = reader.read_bit_long();
+            let _wire_type = reader.read_byte();
+            let _selection_marker = reader.read_bit_long();
+            let _color = reader.read_bit_long();
+            let num_pts = safe_count(reader.read_bit_long());
+            for _ in 0..num_pts {
+                let _pt = reader.read_3bit_double();
+            }
+            let has_transform = reader.read_bit();
+            if has_transform {
+                let _x_axis = reader.read_3bit_double();
+                let _y_axis = reader.read_3bit_double();
+                let _z_axis = reader.read_3bit_double();
+                let _translation = reader.read_3bit_double();
+                let _scale = reader.read_bit_double();
+                let _has_rotation = reader.read_bit();
+                let _has_reflection = reader.read_bit();
+                let _has_shear = reader.read_bit();
+            }
+        }
+    }
+
+    // Silhouettes (R2007+)
+    if version.r2007_plus() {
+        let num_silhouettes = safe_count(reader.read_bit_long());
+        for _ in 0..num_silhouettes {
+            let _viewport_id = reader.read_bit_long();
+            let _view_direction = reader.read_3bit_double();
+            let _up_vector = reader.read_3bit_double();
+            let _target = reader.read_3bit_double();
+            let _is_perspective = reader.read_bit();
+            let num_wires = safe_count(reader.read_bit_long());
+            for _ in 0..num_wires {
+                let _acis_index = reader.read_bit_long();
+                let _wire_type = reader.read_byte();
+                let _selection_marker = reader.read_bit_long();
+                let _color = reader.read_bit_long();
+                let num_pts = safe_count(reader.read_bit_long());
+                for _ in 0..num_pts {
+                    let _pt = reader.read_3bit_double();
+                }
+                let has_transform = reader.read_bit();
+                if has_transform {
+                    let _x_axis = reader.read_3bit_double();
+                    let _y_axis = reader.read_3bit_double();
+                    let _z_axis = reader.read_3bit_double();
+                    let _translation = reader.read_3bit_double();
+                    let _scale = reader.read_bit_double();
+                    let _has_rotation = reader.read_bit();
+                    let _has_reflection = reader.read_bit();
+                    let _has_shear = reader.read_bit();
+                }
+            }
+        }
+    }
+
+    AcisEntityData {
+        acis_empty: false,
+        sat_data,
+        sab_data,
+        is_binary,
+        version: acis_version,
+        point,
+        has_history: false, // caller sets this for 3DSOLID
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════
 //  Tests
 // ════════════════════════════════════════════════════════════════════════
 

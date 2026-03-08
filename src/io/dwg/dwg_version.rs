@@ -130,11 +130,12 @@ impl DwgVersion {
     /// Returns `None` for unrecognized version strings.
     pub fn from_version_string(s: &str) -> Option<Self> {
         match s {
-            "AC1012" | "AC1014" => Some(DwgVersion::AC12),
-            "AC1015" => Some(DwgVersion::AC15),
-            "AC1018" => Some(DwgVersion::AC18),
+            "AC1012" | "AC1014" | "AD1012" | "AD1014" => Some(DwgVersion::AC12),
+            "AC1015" | "AD1015" => Some(DwgVersion::AC15),
+            "AC1018" | "AD1018" => Some(DwgVersion::AC18),
             "AC1021" | "AD1021" => Some(DwgVersion::AC21),
-            "AC1024" | "AC1027" | "AC1032" => Some(DwgVersion::AC24),
+            "AC1024" | "AC1027" | "AC1032"
+            | "AD1024" | "AD1027" | "AD1032" => Some(DwgVersion::AC24),
             _ => None,
         }
     }

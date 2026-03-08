@@ -137,6 +137,17 @@ impl DwgDocumentBuilder {
         // constants so the match statements work correctly.
         let class_map = Self::build_class_type_map(document);
 
+        // Build a set of class numbers that represent graphical entities
+        // (as opposed to non-entity objects).  Used in Pass 2 to correctly
+        // classify unresolved class-based types (≥500) that aren't in
+        // dxf_name_to_type_code.
+        let entity_class_numbers: std::collections::HashSet<i16> = document
+            .classes
+            .iter()
+            .filter(|c| c.is_an_entity && c.class_number >= 500)
+            .map(|c| c.class_number)
+            .collect();
+
         // ── Pass 1: Build handle→name maps from table entries ──────────
         //
         // In addition to building handle→name lookup maps (for Pass 2
@@ -156,6 +167,10 @@ impl DwgDocumentBuilder {
             Style(u64, tables::TextStyleData),
             Ltype(u64, tables::LinetypeData),
             DimStyle(u64, tables::DimStyleData),
+            View(u64, tables::ViewData),
+            Ucs(u64, tables::UcsData),
+            VPort(u64, tables::VPortData),
+            AppId(u64, tables::AppIdData),
         }
         let mut parsed_entries: Vec<ParsedEntry> = Vec::new();
 
@@ -231,6 +246,34 @@ impl DwgDocumentBuilder {
                             );
                             Some(ParsedEntry::DimStyle(obj_handle, data))
                         },
+                        OBJ_VIEW => {
+                            let data = tables::read_view(
+                                &mut reader,
+                                self.obj_reader.version(),
+                            );
+                            Some(ParsedEntry::View(obj_handle, data))
+                        },
+                        OBJ_UCS => {
+                            let data = tables::read_ucs(
+                                &mut reader,
+                                self.obj_reader.version(),
+                            );
+                            Some(ParsedEntry::Ucs(obj_handle, data))
+                        },
+                        OBJ_VPORT => {
+                            let data = tables::read_vport(
+                                &mut reader,
+                                self.obj_reader.version(),
+                            );
+                            Some(ParsedEntry::VPort(obj_handle, data))
+                        },
+                        OBJ_APPID => {
+                            let data = tables::read_appid(
+                                &mut reader,
+                                self.obj_reader.version(),
+                            );
+                            Some(ParsedEntry::AppId(obj_handle, data))
+                        },
                         _ => None,
                     }
                 }));
@@ -243,6 +286,10 @@ impl DwgDocumentBuilder {
                             ParsedEntry::Style(h, data) => { maps.text_styles.insert(*h, data.name.clone()); },
                             ParsedEntry::Ltype(h, data) => { maps.linetypes.insert(*h, data.name.clone()); },
                             ParsedEntry::DimStyle(h, data) => { maps.dim_styles.insert(*h, data.name.clone()); },
+                            ParsedEntry::View(_, _) => {},
+                            ParsedEntry::Ucs(_, _) => {},
+                            ParsedEntry::VPort(_, _) => {},
+                            ParsedEntry::AppId(_, _) => {},
                         }
                         parsed_entries.push(entry);
                     }
@@ -406,6 +453,57 @@ impl DwgDocumentBuilder {
                     let _ = document.dim_styles.remove(&data.name);
                     let _ = document.dim_styles.add(ds);
                 },
+                ParsedEntry::View(h, data) => {
+                    let mut view = crate::tables::View::new(&data.name);
+                    view.handle = Handle::from(*h);
+                    view.height = data.height;
+                    view.width = data.width;
+                    view.center = crate::types::Vector3::new(data.center.x, data.center.y, 0.0);
+                    view.target = data.target;
+                    view.direction = data.direction;
+                    view.twist_angle = data.twist_angle;
+                    view.lens_length = data.lens_length;
+                    view.front_clip = data.front_clip;
+                    view.back_clip = data.back_clip;
+                    let _ = document.views.remove(&data.name);
+                    let _ = document.views.add(view);
+                },
+                ParsedEntry::Ucs(h, data) => {
+                    let mut ucs = crate::tables::Ucs::new(&data.name);
+                    ucs.handle = Handle::from(*h);
+                    ucs.origin = data.origin;
+                    ucs.x_axis = data.x_axis;
+                    ucs.y_axis = data.y_axis;
+                    let _ = document.ucss.remove(&data.name);
+                    let _ = document.ucss.add(ucs);
+                },
+                ParsedEntry::VPort(h, data) => {
+                    let mut vp = crate::tables::VPort::new(&data.name);
+                    vp.handle = Handle::from(*h);
+                    vp.lower_left = data.lower_left;
+                    vp.upper_right = data.upper_right;
+                    vp.view_center = data.view_center;
+                    vp.snap_base = data.snap_base;
+                    vp.snap_spacing = data.snap_spacing;
+                    vp.grid_spacing = data.grid_spacing;
+                    vp.view_direction = data.view_direction;
+                    vp.view_target = data.view_target;
+                    vp.view_height = data.view_height;
+                    vp.aspect_ratio = if data.view_height.abs() > 1e-10 {
+                        data.aspect_ratio_times_height / data.view_height
+                    } else {
+                        1.0
+                    };
+                    vp.lens_length = data.lens_length;
+                    let _ = document.vports.remove(&data.name);
+                    let _ = document.vports.add(vp);
+                },
+                ParsedEntry::AppId(h, data) => {
+                    let mut app = crate::tables::AppId::new(&data.name);
+                    app.handle = Handle::from(*h);
+                    let _ = document.app_ids.remove(&data.name);
+                    let _ = document.app_ids.add(app);
+                },
             }
         }
 
@@ -428,7 +526,7 @@ impl DwgDocumentBuilder {
             // Wrap per-object processing in catch_unwind to survive
             // corrupt or misaligned records without crashing the entire read.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.process_pass2_record(handle, type_code, reader, document, &maps, &mut pending);
+                self.process_pass2_record(handle, type_code, reader, document, &maps, &mut pending, &entity_class_numbers);
             }));
             if let Err(ref _e) = result {
                 skipped_pass2 += 1;
@@ -504,6 +602,17 @@ impl DwgDocumentBuilder {
                             }
                         }
                     }
+                    EntityType::PolygonMesh(ref mut e) => {
+                        e.vertices = verts.into_iter().filter_map(|v| {
+                            if let PendingVertex::V3D(d) = v {
+                                Some(crate::entities::polygon_mesh::PolygonMeshVertex {
+                                    common: crate::entities::EntityCommon::new(),
+                                    location: d.position,
+                                    flags: 0,
+                                })
+                            } else { None }
+                        }).collect();
+                    }
                     _ => {}
                 }
             }
@@ -538,8 +647,17 @@ impl DwgDocumentBuilder {
         document: &mut CadDocument,
         maps: &HandleMaps,
         pending: &mut PendingPolylines,
+        entity_class_numbers: &std::collections::HashSet<i16>,
     ) {
-        if is_entity_type(type_code) {
+        // For class-based types (≥500) that weren't resolved via the class
+        // map, check the class's is_an_entity flag.  This prevents misreading
+        // object data as entity data (different binary layout).
+        let is_entity = if type_code >= 500 {
+            entity_class_numbers.contains(&type_code)
+        } else {
+            is_entity_type(type_code)
+        };
+        if is_entity {
             let entity_data = self.obj_reader.read_common_entity_data(&mut reader, type_code);
             let entity_common = map_entity_common(&entity_data, maps);
 
@@ -1187,6 +1305,136 @@ impl DwgDocumentBuilder {
                         .push(PendingVertex::PfaceFace(data));
                 },
 
+                // ── Raster image / Wipeout ─────────────────────────
+                OBJ_IMAGE => {
+                    let data = entities::read_raster_image(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = RasterImage::new("", data.insertion_point, data.size.x, data.size.y);
+                    e.common = entity_common;
+                    e.class_version = data.class_version;
+                    e.u_vector = data.u_vector;
+                    e.v_vector = data.v_vector;
+                    e.flags = ImageDisplayFlags::from_bits_truncate(data.flags);
+                    e.clipping_enabled = data.clipping_enabled;
+                    e.brightness = data.brightness;
+                    e.contrast = data.contrast;
+                    e.fade = data.fade;
+                    if data.definition_handle != 0 {
+                        e.definition_handle = Some(Handle::from(data.definition_handle));
+                    }
+                    if data.reactor_handle != 0 {
+                        e.definition_reactor_handle = Some(Handle::from(data.reactor_handle));
+                    }
+                    let _ = document.add_entity(EntityType::RasterImage(e));
+                },
+                OBJ_WIPEOUT => {
+                    let data = entities::read_wipeout(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = Wipeout::new();
+                    e.common = entity_common;
+                    e.class_version = data.class_version;
+                    e.insertion_point = data.insertion_point;
+                    e.u_vector = data.u_vector;
+                    e.v_vector = data.v_vector;
+                    e.size = data.size;
+                    e.flags = WipeoutDisplayFlags::from_bits_truncate(data.flags);
+                    e.clipping_enabled = data.clipping_enabled;
+                    e.brightness = data.brightness;
+                    e.contrast = data.contrast;
+                    e.fade = data.fade;
+                    if data.definition_handle != 0 {
+                        e.definition_handle = Some(Handle::from(data.definition_handle));
+                    }
+                    if data.reactor_handle != 0 {
+                        e.definition_reactor_handle = Some(Handle::from(data.reactor_handle));
+                    }
+                    let _ = document.add_entity(EntityType::Wipeout(e));
+                },
+
+                // ── OLE2 Frame ──────────────────────────────────────
+                OBJ_OLE2FRAME => {
+                    let data = entities::read_ole2frame(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = Ole2Frame::new();
+                    e.common = entity_common;
+                    e.version = data.version;
+                    e.binary_data = data.data;
+                    let _ = document.add_entity(EntityType::Ole2Frame(e));
+                },
+
+                // ── Polygon mesh (POLYLINE with mesh flag) ──────────
+                OBJ_POLYLINE_MESH => {
+                    let (flags, smooth_type, m_count, n_count, m_smooth, n_smooth, _owned_count)
+                        = entities::read_polygon_mesh(&mut reader, self.obj_reader.version());
+                    let mut e = PolygonMeshEntity::new();
+                    e.common = entity_common;
+                    e.flags = PolygonMeshFlags::from_bits_truncate(flags);
+                    e.m_vertex_count = m_count;
+                    e.n_vertex_count = n_count;
+                    e.m_smooth_density = m_smooth;
+                    e.n_smooth_density = n_smooth;
+                    e.smooth_type = SurfaceSmoothType::from_i16(smooth_type);
+                    // Vertices will be assembled from VERTEX_MESH records
+                    let poly_handle = entity_data.common.handle;
+                    pending.polylines.push((poly_handle, EntityType::PolygonMesh(e)));
+                },
+
+                // ── ACIS entities (3DSOLID, REGION, BODY) ───────────
+                OBJ_3DSOLID => {
+                    let data = entities::read_acis_entity(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = Solid3D::new();
+                    e.common = entity_common;
+                    e.point_of_reference = data.point;
+                    e.acis_data.version = if data.is_binary {
+                        crate::entities::solid3d::AcisVersion::Version2
+                    } else {
+                        crate::entities::solid3d::AcisVersion::Version1
+                    };
+                    e.acis_data.sat_data = data.sat_data;
+                    e.acis_data.sab_data = data.sab_data;
+                    e.acis_data.is_binary = data.is_binary;
+                    let _ = document.add_entity(EntityType::Solid3D(e));
+                },
+                OBJ_REGION => {
+                    let data = entities::read_acis_entity(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = Region::new();
+                    e.common = entity_common;
+                    e.point_of_reference = data.point;
+                    e.acis_data.version = if data.is_binary {
+                        crate::entities::solid3d::AcisVersion::Version2
+                    } else {
+                        crate::entities::solid3d::AcisVersion::Version1
+                    };
+                    e.acis_data.sat_data = data.sat_data;
+                    e.acis_data.sab_data = data.sab_data;
+                    e.acis_data.is_binary = data.is_binary;
+                    let _ = document.add_entity(EntityType::Region(e));
+                },
+                OBJ_BODY => {
+                    let data = entities::read_acis_entity(
+                        &mut reader, self.obj_reader.version(),
+                    );
+                    let mut e = Body::new();
+                    e.common = entity_common;
+                    e.point_of_reference = data.point;
+                    e.acis_data.version = if data.is_binary {
+                        crate::entities::solid3d::AcisVersion::Version2
+                    } else {
+                        crate::entities::solid3d::AcisVersion::Version1
+                    };
+                    e.acis_data.sat_data = data.sat_data;
+                    e.acis_data.sab_data = data.sab_data;
+                    e.acis_data.is_binary = data.is_binary;
+                    let _ = document.add_entity(EntityType::Body(e));
+                },
+
                 // ── Catch-all ──────────────────────────────────────
                 _ => {
                     let mut e = UnknownEntity::new(format!("DWG_TYPE_{}", type_code));
@@ -1301,6 +1549,194 @@ impl DwgDocumentBuilder {
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::XRecord(obj),
+                    );
+                },
+                OBJ_PLOTSETTINGS => {
+                    let data = objects::read_plot_settings_obj(&mut reader, self.obj_reader.version());
+                    let mut obj = crate::objects::PlotSettings::new(&data.page_name);
+                    obj.handle = Handle::from(handle);
+                    obj.printer_name = data.printer_name;
+                    obj.paper_size = data.paper_size;
+                    obj.plot_view_name = data.plot_view_name;
+                    obj.current_style_sheet = data.current_style_sheet;
+                    obj.paper_width = data.paper_width;
+                    obj.paper_height = data.paper_height;
+                    obj.margins = crate::objects::PaperMargin::new(
+                        data.left_margin, data.bottom_margin,
+                        data.right_margin, data.top_margin,
+                    );
+                    obj.origin_x = data.origin_x;
+                    obj.origin_y = data.origin_y;
+                    obj.plot_window = crate::objects::PlotWindow::new(
+                        data.window_min_x, data.window_min_y,
+                        data.window_max_x, data.window_max_y,
+                    );
+                    obj.scale_numerator = data.scale_numerator;
+                    obj.scale_denominator = data.scale_denominator;
+                    obj.paper_units = crate::objects::PlotPaperUnits::from_code(data.paper_units);
+                    obj.rotation = crate::objects::PlotRotation::from_code(data.rotation);
+                    obj.plot_type = crate::objects::PlotType::from_code(data.plot_type);
+                    obj.scale_type = crate::objects::ScaledType::from_code(data.scale_type);
+                    obj.shade_plot_mode = crate::objects::ShadePlotMode::from_code(data.shade_plot_mode);
+                    obj.shade_plot_resolution = crate::objects::ShadePlotResolutionLevel::from_code(data.shade_plot_resolution);
+                    obj.shade_plot_dpi = data.shade_plot_dpi;
+                    obj.flags = crate::objects::PlotFlags::from_bits(data.plot_flags as i32);
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::PlotSettings(obj),
+                    );
+                },
+                OBJ_MLEADERSTYLE => {
+                    let data = objects::read_multileader_style(&mut reader, self.obj_reader.version());
+                    let mut obj = crate::objects::MultiLeaderStyle::new("");
+                    obj.handle = Handle::from(handle);
+                    obj.description = data.description;
+                    obj.content_type = crate::objects::LeaderContentType::from(data.content_type);
+                    obj.multileader_draw_order = crate::objects::MultiLeaderDrawOrderType::from(data.multileader_draw_order);
+                    obj.leader_draw_order = crate::objects::LeaderDrawOrderType::from(data.leader_draw_order);
+                    obj.max_leader_points = data.max_leader_points;
+                    obj.first_segment_angle = data.first_segment_angle;
+                    obj.second_segment_angle = data.second_segment_angle;
+                    obj.path_type = crate::objects::MultiLeaderPathType::from(data.path_type);
+                    obj.line_color = data.line_color;
+                    obj.line_type_handle = if data.line_type_handle != 0 { Some(Handle::from(data.line_type_handle)) } else { None };
+                    obj.line_weight = LineWeight::from_value(data.line_weight);
+                    obj.enable_landing = data.enable_landing;
+                    obj.landing_gap = data.landing_gap;
+                    obj.enable_dogleg = data.enable_dogleg;
+                    obj.landing_distance = data.landing_distance;
+                    obj.arrowhead_handle = if data.arrowhead_handle != 0 { Some(Handle::from(data.arrowhead_handle)) } else { None };
+                    obj.arrowhead_size = data.arrowhead_size;
+                    obj.default_text = data.default_text;
+                    obj.text_style_handle = if data.text_style_handle != 0 { Some(Handle::from(data.text_style_handle)) } else { None };
+                    obj.text_left_attachment = crate::objects::TextAttachmentType::from(data.text_left_attachment);
+                    obj.text_right_attachment = crate::objects::TextAttachmentType::from(data.text_right_attachment);
+                    obj.text_angle_type = crate::objects::TextAngleType::from(data.text_angle_type);
+                    obj.text_alignment = crate::objects::TextAlignmentType::from(data.text_alignment);
+                    obj.text_color = data.text_color;
+                    obj.text_height = data.text_height;
+                    obj.text_frame = data.text_frame;
+                    obj.text_always_left = data.text_always_left;
+                    obj.align_space = data.align_space;
+                    obj.block_content_handle = if data.block_content_handle != 0 { Some(Handle::from(data.block_content_handle)) } else { None };
+                    obj.block_content_color = data.block_content_color;
+                    obj.block_content_scale_x = data.block_content_scale_x;
+                    obj.block_content_scale_y = data.block_content_scale_y;
+                    obj.block_content_scale_z = data.block_content_scale_z;
+                    obj.enable_block_scale = data.enable_block_scale;
+                    obj.block_content_rotation = data.block_content_rotation;
+                    obj.enable_block_rotation = data.enable_block_rotation;
+                    obj.block_content_connection = crate::objects::BlockContentConnectionType::from(data.block_content_connection);
+                    obj.scale_factor = data.scale_factor;
+                    obj.is_annotative = data.is_annotative;
+                    obj.break_gap_size = data.break_gap_size;
+                    obj.text_attachment_direction = crate::objects::TextAttachmentDirectionType::from(data.text_attachment_direction);
+                    obj.text_top_attachment = crate::objects::TextAttachmentType::from(data.text_top_attachment);
+                    obj.text_bottom_attachment = crate::objects::TextAttachmentType::from(data.text_bottom_attachment);
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::MultiLeaderStyle(obj),
+                    );
+                },
+                OBJ_IMAGEDEF => {
+                    let data = objects::read_image_definition(&mut reader);
+                    let mut obj = crate::objects::ImageDefinition::new(&data.file_name);
+                    obj.handle = Handle::from(handle);
+                    obj.class_version = data.class_version;
+                    obj.is_loaded = data.is_loaded;
+                    obj.size_in_pixels = (data.size_in_pixels.x as u32, data.size_in_pixels.y as u32);
+                    obj.pixel_size = (data.pixel_size.x, data.pixel_size.y);
+                    obj.resolution_unit = crate::objects::ResolutionUnit::from_code(data.resolution_unit as i32);
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::ImageDefinition(obj),
+                    );
+                },
+                OBJ_IMAGEDEFREACTOR => {
+                    let _data = objects::read_image_definition_reactor(&mut reader);
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::ImageDefinitionReactor(
+                            crate::objects::ImageDefinitionReactor {
+                                handle: Handle::from(handle),
+                                owner: Handle::NULL,
+                                image_handle: Handle::NULL,
+                            }
+                        ),
+                    );
+                },
+                OBJ_SCALE => {
+                    let data = objects::read_scale(&mut reader);
+                    let mut obj = crate::objects::Scale::new(&data.name, data.paper_units, data.drawing_units);
+                    obj.handle = Handle::from(handle);
+                    obj.is_unit_scale = data.is_unit_scale;
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::Scale(obj),
+                    );
+                },
+                OBJ_SORTENTSTABLE => {
+                    let data = objects::read_sort_entities_table(&mut reader);
+                    let mut obj = crate::objects::SortEntitiesTable::new();
+                    obj.handle = Handle::from(handle);
+                    obj.block_owner_handle = Handle::from(data.block_owner_handle);
+                    for entry in data.entries {
+                        obj.add_entry(Handle::from(entry.entity_handle), Handle::from(entry.sort_handle));
+                    }
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::SortEntitiesTable(obj),
+                    );
+                },
+                OBJ_RASTERVARIABLES => {
+                    let data = objects::read_raster_variables(&mut reader);
+                    let obj = crate::objects::RasterVariables {
+                        handle: Handle::from(handle),
+                        owner: Handle::NULL,
+                        class_version: data.class_version,
+                        display_image_frame: data.display_image_frame,
+                        image_quality: data.image_quality,
+                        units: data.units,
+                    };
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::RasterVariables(obj),
+                    );
+                },
+                OBJ_DBCOLOR => {
+                    let data = objects::read_book_color(&mut reader);
+                    let obj = crate::objects::BookColor {
+                        handle: Handle::from(handle),
+                        owner: Handle::NULL,
+                        color_name: data.color_name,
+                        book_name: data.book_name,
+                    };
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::BookColor(obj),
+                    );
+                },
+                OBJ_PLACEHOLDER => {
+                    objects::read_placeholder(&mut reader);
+                    let obj = crate::objects::PlaceHolder {
+                        handle: Handle::from(handle),
+                        owner: Handle::NULL,
+                    };
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::PlaceHolder(obj),
+                    );
+                },
+                OBJ_WIPEOUTVARIABLES => {
+                    let data = objects::read_wipeout_variables(&mut reader);
+                    let obj = crate::objects::WipeoutVariables {
+                        handle: Handle::from(handle),
+                        owner: Handle::NULL,
+                        display_frame: data.display_frame,
+                    };
+                    document.objects.insert(
+                        Handle::from(handle),
+                        crate::objects::ObjectType::WipeoutVariables(obj),
                     );
                 },
                 _ => {
