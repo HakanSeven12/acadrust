@@ -1,4 +1,4 @@
-# acadrust 0.2.6
+# acadrust 0.2.7
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
@@ -166,7 +166,7 @@ Add acadrust to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acadrust = "0.2.6"
+acadrust = "0.2.7"
 ```
 
 Or install via cargo:
@@ -183,7 +183,7 @@ cargo add acadrust
 
 ```toml
 [dependencies]
-acadrust = { version = "0.2.5", features = ["serde"] }
+acadrust = { version = "0.2.7", features = ["serde"] }
 ```
 
 ---
