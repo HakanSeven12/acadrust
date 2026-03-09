@@ -1,4 +1,4 @@
-# acadrust 0.2.7
+# acadrust 0.2.8
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
@@ -17,6 +17,7 @@ acadrust provides comprehensive support for the DXF and DWG file formats with a 
 
 - **📖 Read & Write DXF** — Full support for both ASCII and Binary DXF formats
 - **📐 Read & Write DWG** — Native DWG binary input/output for R13 through R2018 (8 versions), 208/208 roundtrip-perfect
+- **🧊 3D Solid Creation** — Read/Build ACIS-based simple 3DSOLID entities (box, wedge, pyramid, cylinder, and custom B-Rep) with SAT text (R2000–R2007) and SAB binary (R2013+) encoding
 - **🔒 Type Safe** — Leverages Rust's type system with strongly-typed entities, tables, and objects
 - **🌐 Encoding Support** — Automatic code page detection and character encoding for pre-2007 files (~40 code pages via `encoding_rs`)
 - **🛡️ Failsafe Mode** — Optional error-tolerant parsing that collects diagnostics instead of aborting
@@ -90,7 +91,7 @@ acadrust provides comprehensive support for the DXF and DWG file formats with a 
 #### Advanced Entities
 - **Viewport** — Paper space viewport
 - **RasterImage** — Embedded or linked raster image
-- **Solid3D** — 3D solid with ACIS data
+- **Solid3D** — 3D solid with ACIS data (read & **write** — SAT v7.0 text and SAB binary)
 - **Region** — 2D region with ACIS data
 - **Body** — 3D body with ACIS data
 - **MLine** — Multi-line with style
@@ -166,7 +167,7 @@ Add acadrust to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-acadrust = "0.2.7"
+acadrust = "0.2.8"
 ```
 
 Or install via cargo:
@@ -183,7 +184,7 @@ cargo add acadrust
 
 ```toml
 [dependencies]
-acadrust = { version = "0.2.7", features = ["serde"] }
+acadrust = { version = "0.2.8", features = ["serde"] }
 ```
 
 ---
@@ -315,6 +316,51 @@ when the `serde` feature is enabled, making it easy to build web APIs, store
 drawings in databases, or convert between formats.
 
 See the full example: [`examples/serde_json.rs`](examples/serde_json.rs)
+
+### Creating 3D Solids (ACIS)
+
+acadrust includes a SAT/SAB builder for creating ACIS 3DSOLID entities from scratch.
+The builder emits SAT v7.0 text for R2000–R2007 and SAB binary for R2013+.
+
+```rust
+use acadrust::{CadDocument, DwgWriter, DxfVersion, EntityType};
+use acadrust::entities::Solid3D;
+use acadrust::entities::acis::{SatDocument, SatPointer, Sense, Sidedness};
+
+fn main() -> acadrust::Result<()> {
+    // Start a new ACIS body
+    let mut sat = SatDocument::new_body();
+    let body_idx = SatPointer::new(0);
+
+    // Geometry: 6 plane surfaces for a 10×10×10 box
+    let surf_top    = sat.add_plane_surface([0.0, 0.0,  5.0], [0.0, 0.0,  1.0], [1.0, 0.0, 0.0]);
+    let surf_bottom = sat.add_plane_surface([0.0, 0.0, -5.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
+    // ... add remaining surfaces, curves, vertices, edges, coedges, loops, faces, shell, lump
+
+    // Wrap in a Solid3D and write to DWG
+    let mut solid = Solid3D::new();
+    solid.set_sat_document(&sat);
+
+    let mut doc = CadDocument::with_version(DxfVersion::AC1027); // R2013
+    doc.add_entity(EntityType::Solid3D(solid))?;
+    DwgWriter::write_to_file("box.dwg", &doc)?;
+
+    Ok(())
+}
+```
+
+Available surface/curve builders:
+
+| Method | Description |
+|--------|-------------|
+| `add_plane_surface` | Infinite plane (origin, normal, u-axis) |
+| `add_cone_surface` | Cone / cylinder (center, axis, major-axis, ratio, half-angle) |
+| `add_sphere_surface` | Sphere (center, axis, radius) |
+| `add_torus_surface` | Torus (center, axis, major/minor radii) |
+| `add_straight_curve` | Infinite line (point, direction) |
+| `add_ellipse_curve` | Ellipse / circle (center, normal, major-axis, ratio) |
+
+See the full example: [`examples/write_3dsolid_dwg.rs`](examples/write_3dsolid_dwg.rs) — builds a box, wedge, pyramid, and cylinder.
 
 ### Reading a DWG File
 
@@ -562,6 +608,7 @@ cargo bench
 - [x] DWG binary read (R13 through R2018)
 - [x] 208/208 roundtrip data integrity (0 field drift across all entity types × all versions)
 - [x] Optional serde support (`Serialize` / `Deserialize` for all types)
+- [x] ACIS 3DSOLID read/write — SAT text (R2000–R2007) and SAB binary (R2013+) with builder API
 - [ ] Geometric operations (offset, trim, extend)
 - [ ] SVG/PDF export
 - [ ] Spatial indexing for large drawings
