@@ -326,7 +326,8 @@ impl SatDocument {
             + major_axis[2] * major_axis[2])
         .sqrt();
         record.tokens.push(SatToken::Float(radius));
-        record.tokens.push(SatToken::Ident("forward_v".to_string()));
+        // cone-surface uses `forward` (not `forward_v` like plane/sphere)
+        record.tokens.push(SatToken::Ident("forward".to_string()));
         record.tokens.push(SatToken::Ident("I".to_string()));
         record.tokens.push(SatToken::Ident("I".to_string()));
         record.tokens.push(SatToken::Ident("I".to_string()));
@@ -511,8 +512,8 @@ impl SatDocument {
         let index = self.records.len() as i32;
         let mut record = SatRecord::new(index, "loop");
         record.attribute = SatPointer::NULL;
-        record.tokens.push(SatToken::Pointer(next_loop));
         record.tokens.push(SatToken::Pointer(SatPointer::NULL)); // unknown (always $-1)
+        record.tokens.push(SatToken::Pointer(next_loop));
         record.tokens.push(SatToken::Pointer(first_coedge));
         record.tokens.push(SatToken::Pointer(face));
         self.records.push(record);

@@ -405,32 +405,36 @@ pub fn build_cylinder(center: [f64; 3], radius: f64, height: f64) -> SatDocument
 
     let crv_bot  = sat.add_ellipse_curve([cx, cy, cz],          [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0);
     let crv_top  = sat.add_ellipse_curve([cx, cy, cz + height], [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0);
-    let crv_seam = sat.add_straight_curve([cx + radius, cy, cz], [0.0, 0.0, 1.0]);
 
     let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
     let v1 = sat.add_vertex(SatPointer::NULL, ptr(p1));
 
-    let e_bot  = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau,    SatPointer::NULL, ptr(crv_bot),  Sense::Forward);
-    let e_top  = sat.add_edge(ptr(v1), 0.0, ptr(v1), tau,    SatPointer::NULL, ptr(crv_top),  Sense::Forward);
-    let e_seam = sat.add_edge(ptr(v0), 0.0, ptr(v1), height, SatPointer::NULL, ptr(crv_seam), Sense::Forward);
+    let e_bot  = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau, SatPointer::NULL, ptr(crv_bot), Sense::Forward);
+    let e_top  = sat.add_edge(ptr(v1), 0.0, ptr(v1), tau, SatPointer::NULL, ptr(crv_top), Sense::Forward);
 
+    // Cylindrical face uses two separate loops (one per boundary circle),
+    // matching the ACIS convention — no seam edge needed.
     let base = sat.records.len() as i32;
     let co = |i: i32| base + i;
-    let loop_base = base + 6;
-    let face_base = base + 9;
-    let shell_idx = base + 12;
-    let lump_idx  = base + 13;
+    let loop_base = base + 4;
+    let face_base = base + 8;
+    let shell_idx = base + 11;
+    let lump_idx  = base + 12;
 
-    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(4)), ptr(e_bot), Sense::Reversed, ptr(loop_base));
-    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(2)), ptr(e_top), Sense::Forward, ptr(loop_base + 1));
-    sat.add_coedge(ptr(co(5)), ptr(co(3)), ptr(co(1)), ptr(e_top),  Sense::Reversed, ptr(loop_base + 2));
-    sat.add_coedge(ptr(co(2)), ptr(co(4)), ptr(co(5)), ptr(e_seam), Sense::Forward,  ptr(loop_base + 2));
-    sat.add_coedge(ptr(co(3)), ptr(co(5)), ptr(co(0)), ptr(e_bot),  Sense::Forward,  ptr(loop_base + 2));
-    sat.add_coedge(ptr(co(4)), ptr(co(2)), ptr(co(3)), ptr(e_seam), Sense::Reversed, ptr(loop_base + 2));
+    // co0: bottom circle on bottom-cap face (single-coedge loop)
+    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(2)), ptr(e_bot), Sense::Forward, ptr(loop_base));
+    // co1: top circle on top-cap face (single-coedge loop)
+    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(3)), ptr(e_top), Sense::Forward, ptr(loop_base + 1));
+    // co2: bottom circle boundary on cylindrical face (single-coedge loop)
+    sat.add_coedge(ptr(co(2)), ptr(co(2)), ptr(co(0)), ptr(e_bot), Sense::Reversed, ptr(loop_base + 2));
+    // co3: top circle boundary on cylindrical face (single-coedge loop)
+    sat.add_coedge(ptr(co(3)), ptr(co(3)), ptr(co(1)), ptr(e_top), Sense::Reversed, ptr(loop_base + 3));
 
-    sat.add_loop(SatPointer::NULL, ptr(co(0)), ptr(face_base));
-    sat.add_loop(SatPointer::NULL, ptr(co(1)), ptr(face_base + 1));
-    sat.add_loop(SatPointer::NULL, ptr(co(2)), ptr(face_base + 2));
+    // Bottom cap loop, top cap loop, cylindrical face loop (bottom), cylindrical face loop (top)
+    sat.add_loop(SatPointer::NULL,       ptr(co(0)), ptr(face_base));
+    sat.add_loop(SatPointer::NULL,       ptr(co(1)), ptr(face_base + 1));
+    sat.add_loop(ptr(loop_base + 3),     ptr(co(2)), ptr(face_base + 2));  // next_loop = top boundary loop
+    sat.add_loop(SatPointer::NULL,       ptr(co(3)), ptr(face_base + 2));  // second loop on same cyl face
 
     sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_bot), Sense::Forward, Sidedness::Single);
     sat.add_face(ptr(face_base + 2), ptr(loop_base + 1), ptr(shell_idx), ptr(surf_top), Sense::Forward, Sidedness::Single);
@@ -451,6 +455,8 @@ pub fn build_cylinder(center: [f64; 3], radius: f64, height: f64) -> SatDocument
 /// - `height`: distance from the base to the apex along Z
 ///
 /// The apex is at `center.z + height`.
+/// The cone face has two loops: the base circle boundary and a degenerate
+/// (singularity) edge at the apex.
 pub fn build_cone(center: [f64; 3], radius: f64, height: f64) -> SatDocument {
     let mut sat = SatDocument::new_body();
     let body_idx = SatPointer::new(0);
@@ -460,7 +466,8 @@ pub fn build_cone(center: [f64; 3], radius: f64, height: f64) -> SatDocument {
     let sin_half = -radius / hyp;
     let cos_half = height / hyp;
 
-    let p0 = sat.add_point(cx + radius, cy, cz);
+    let p_base = sat.add_point(cx + radius, cy, cz);
+    let p_apex = sat.add_point(cx, cy, cz + height);
 
     let surf_base = sat.add_plane_surface([cx, cy, cz], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
     let surf_cone = sat.add_cone_surface(
@@ -472,21 +479,32 @@ pub fn build_cone(center: [f64; 3], radius: f64, height: f64) -> SatDocument {
         [cx, cy, cz], [0.0, 0.0, 1.0], [radius, 0.0, 0.0], 1.0,
     );
 
-    let v0 = sat.add_vertex(SatPointer::NULL, ptr(p0));
-    let e0 = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau, SatPointer::NULL, ptr(crv_base), Sense::Forward);
+    let v0 = sat.add_vertex(SatPointer::NULL, ptr(p_base));
+    let v_apex = sat.add_vertex(SatPointer::NULL, ptr(p_apex));
+
+    let e_base = sat.add_edge(ptr(v0), 0.0, ptr(v0), tau, SatPointer::NULL, ptr(crv_base), Sense::Forward);
+    // Singularity (degenerate) edge at the apex — zero-length, no curve
+    let e_apex = sat.add_edge(ptr(v_apex), 1.0, ptr(v_apex), 0.0, SatPointer::NULL, SatPointer::NULL, Sense::Forward);
 
     let base = sat.records.len() as i32;
     let co = |i: i32| base + i;
-    let loop_base = base + 2;
-    let face_base = base + 4;
-    let shell_idx = base + 6;
-    let lump_idx  = base + 7;
+    let loop_base = base + 3;
+    let face_base = base + 6;
+    let shell_idx = base + 8;
+    let lump_idx  = base + 9;
 
-    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(1)), ptr(e0), Sense::Reversed, ptr(loop_base));
-    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(0)), ptr(e0), Sense::Forward,  ptr(loop_base + 1));
+    // co0: base circle on the base-cap face
+    sat.add_coedge(ptr(co(0)), ptr(co(0)), ptr(co(1)), ptr(e_base), Sense::Reversed, ptr(loop_base));
+    // co1: base circle boundary on the cone face
+    sat.add_coedge(ptr(co(1)), ptr(co(1)), ptr(co(0)), ptr(e_base), Sense::Forward,  ptr(loop_base + 1));
+    // co2: singularity (apex) on the cone face — partner=$-1 (no partner for degenerate edge)
+    sat.add_coedge(ptr(co(2)), ptr(co(2)), SatPointer::NULL, ptr(e_apex), Sense::Reversed, ptr(loop_base + 2));
 
+    // Base cap loop
     sat.add_loop(SatPointer::NULL, ptr(co(0)), ptr(face_base));
-    sat.add_loop(SatPointer::NULL, ptr(co(1)), ptr(face_base + 1));
+    // Cone face: two loops — base circle boundary + apex singularity
+    sat.add_loop(ptr(loop_base + 2), ptr(co(1)), ptr(face_base + 1));  // next_loop = singularity loop
+    sat.add_loop(SatPointer::NULL,   ptr(co(2)), ptr(face_base + 1));  // singularity loop on same cone face
 
     sat.add_face(ptr(face_base + 1), ptr(loop_base),     ptr(shell_idx), ptr(surf_base), Sense::Forward, Sidedness::Single);
     sat.add_face(SatPointer::NULL,   ptr(loop_base + 1), ptr(shell_idx), ptr(surf_cone), Sense::Forward, Sidedness::Single);
@@ -596,7 +614,7 @@ mod tests {
     fn cylinder_topology() {
         let sat = build_cylinder([0.0, 0.0, 0.0], 5.0, 10.0);
         assert_eq!(sat.faces().len(), 3);
-        assert_eq!(sat.edges().len(), 3);
+        assert_eq!(sat.edges().len(), 2);
         assert_eq!(sat.vertices().len(), 2);
         assert!(sat.validate().is_empty(), "cylinder validation errors: {:?}", sat.validate());
     }
@@ -605,8 +623,8 @@ mod tests {
     fn cone_topology() {
         let sat = build_cone([0.0, 0.0, 0.0], 5.0, 10.0);
         assert_eq!(sat.faces().len(), 2);
-        assert_eq!(sat.edges().len(), 1);
-        assert_eq!(sat.vertices().len(), 1);
+        assert_eq!(sat.edges().len(), 2);
+        assert_eq!(sat.vertices().len(), 2);
         assert!(sat.validate().is_empty(), "cone validation errors: {:?}", sat.validate());
     }
 

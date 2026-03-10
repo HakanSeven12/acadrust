@@ -54,10 +54,19 @@ fn main() -> acadrust::Result<()> {
     write_solid("sphere_r2013.dwg", DxfVersion::AC1027, &sphere_sat)?;
     write_solid("torus_r2013.dwg", DxfVersion::AC1027, &torus_sat)?;
 
-    // ── 4. Write cylinder at R2000 for SAT-text testing ─────────────
+    // ── 4. Write each shape at R2007 ────────────────────────────────
+    write_solid("box_r2007.dwg", DxfVersion::AC1021, &box_sat)?;
+    write_solid("wedge_r2007.dwg", DxfVersion::AC1021, &wedge_sat)?;
+    write_solid("pyramid_r2007.dwg", DxfVersion::AC1021, &pyramid_sat)?;
+    write_solid("cylinder_r2007.dwg", DxfVersion::AC1021, &cylinder_sat)?;
+    write_solid("cone_r2007.dwg", DxfVersion::AC1021, &cone_sat)?;
+    write_solid("sphere_r2007.dwg", DxfVersion::AC1021, &sphere_sat)?;
+    write_solid("torus_r2007.dwg", DxfVersion::AC1021, &torus_sat)?;
+
+    // ── 5. Write cylinder at R2000 for SAT-text testing ─────────────
     write_solid("cylinder_r2000.dwg", DxfVersion::AC1015, &cylinder_sat)?;
 
-    // ── 5. Read-back verification ───────────────────────────────────
+    // ── 6. Read-back verification ───────────────────────────────────
     {
         use acadrust::DwgReader;
         println!("\n=== Read-back verification ===");
@@ -72,6 +81,13 @@ fn main() -> acadrust::Result<()> {
             "cone_r2013.dwg",
             "sphere_r2013.dwg",
             "torus_r2013.dwg",
+            "box_r2007.dwg",
+            "wedge_r2007.dwg",
+            "pyramid_r2007.dwg",
+            "cylinder_r2007.dwg",
+            "cone_r2007.dwg",
+            "sphere_r2007.dwg",
+            "torus_r2007.dwg",
             "cylinder_r2000.dwg",
         ] {
             let mut reader = DwgReader::from_file(path)?;

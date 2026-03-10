@@ -21,8 +21,6 @@ use acadrust::entities::Solid3D;
 use acadrust::entities::acis::primitives;
 
 fn main() -> acadrust::Result<()> {
-    let version = DxfVersion::AC1027;
-
     let shapes: Vec<(&str, _)> = vec![
         ("box",      primitives::build_box([0.0, 0.0, 0.0], 10.0, 10.0, 10.0)),
         ("wedge",    primitives::build_wedge([0.0, 0.0, 0.0], 10.0, 10.0, 10.0)),
@@ -49,22 +47,29 @@ fn main() -> acadrust::Result<()> {
         }
     }
 
-    println!("\n=== Writing DXF files (version: {:?}) ===", version);
-    for (name, sat) in &shapes {
-        let path = format!("{}.dxf", name);
+    let versions = vec![
+        ("r2013", DxfVersion::AC1027),
+        ("r2007", DxfVersion::AC1021),
+    ];
 
-        let mut solid = Solid3D::new();
-        solid.set_sat_document(sat);
-        solid.common.layer = "0".to_string();
+    for (ver_label, ver) in &versions {
+        println!("\n=== Writing DXF files (version: {:?}) ===", ver);
+        for (name, sat) in &shapes {
+            let path = format!("{}_{}.dxf", name, ver_label);
 
-        let mut doc = CadDocument::with_version(version);
-        doc.add_entity(EntityType::Solid3D(solid))?;
+            let mut solid = Solid3D::new();
+            solid.set_sat_document(sat);
+            solid.common.layer = "0".to_string();
 
-        let writer = DxfWriter::new(doc);
-        writer.write_to_file(&path)?;
+            let mut doc = CadDocument::with_version(*ver);
+            doc.add_entity(EntityType::Solid3D(solid))?;
 
-        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        println!("  {} ({} bytes)", path, size);
+            let writer = DxfWriter::new(doc);
+            writer.write_to_file(&path)?;
+
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            println!("  {} ({} bytes)", path, size);
+        }
     }
 
     println!("\nDone! Open any .dxf file in AutoCAD/IntelliCAD.");
