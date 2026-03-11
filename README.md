@@ -1,641 +1,193 @@
-# acadrust 0.2.9
+# acadrust
 
 [![Crates.io](https://img.shields.io/crates/v/acadrust.svg)](https://crates.io/crates/acadrust)
 [![Documentation](https://docs.rs/acadrust/badge.svg)](https://docs.rs/acadrust)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
-[![Rust](https://img.shields.io/badge/rust-2021-orange.svg)](https://www.rust-lang.org/)
 
 **A pure Rust library for reading and writing CAD files (DXF and DWG).**
 
-acadrust provides comprehensive support for the DXF and DWG file formats with a focus on correctness, type safety, and completeness. Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp), this library brings full-featured CAD file manipulation to the Rust ecosystem.
+Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp). Supports DXF (ASCII & Binary) and DWG (R13–R2018).
 
----
+## Quick Start
 
-## ✨ Features
+```toml
+[dependencies]
+acadrust = "0.2.10"
+```
 
-### Core Capabilities
+```rust
+use acadrust::{CadDocument, DxfReader, DxfWriter};
 
-- **📖 Read & Write DXF** — Full support for both ASCII and Binary DXF formats
-- **📐 Read & Write DWG** — Native DWG binary input/output for R13 through R2018 (8 versions), 208/208 roundtrip-perfect
-- **🧊 3D Solid Creation** — Read/Build ACIS-based 3DSOLID entities and write primitives (box, wedge, pyramid, cylinder, and custom B-Rep) with SAT text (R2000–R2007) and SAB binary (R2013+) encoding
-- **🔒 Type Safe** — Leverages Rust's type system with strongly-typed entities, tables, and objects
-- **🌐 Encoding Support** — Automatic code page detection and character encoding for pre-2007 files (~40 code pages via `encoding_rs`)
-- **🛡️ Failsafe Mode** — Optional error-tolerant parsing that collects diagnostics instead of aborting
-- **📋 Notifications** — Structured diagnostic system reporting unsupported elements, warnings, and errors
-- **🔗 Handle Resolution** — Automatic owner handle assignment and handle tracking after read
-- **❓ Unknown Entity Preservation** — Unrecognized entity types are preserved as `UnknownEntity` with common fields intact
+fn main() -> acadrust::Result<()> {
+    // Read
+    let doc = DxfReader::from_file("input.dxf")?.read()?;
+    println!("{} entities", doc.entities().count());
 
-### File Version Support
+    // Write
+    let writer = DxfWriter::new(doc);
+    writer.write_to_file("output.dxf")?;
+    Ok(())
+}
+```
 
-| Version Code | AutoCAD Version | DXF Read | DXF Write | DWG Read | DWG Write |
-|-------------|-----------------|----------|-----------|----------|----------|
-| AC1009 | R12 | ✅ | ✅ | — | — |
-| AC1012 | R13 | ✅ | ✅ | ✅ | ✅ |
-| AC1014 | R14 | ✅ | ✅ | ✅ | ✅ |
-| AC1015 | 2000 | ✅ | ✅ | ✅ | ✅ |
-| AC1018 | 2004 | ✅ | ✅ | ✅ | ✅ |
-| AC1021 | 2007 | ✅ | ✅ | ✅ | ✅ |
-| AC1024 | 2010 | ✅ | ✅ | ✅ | ✅ |
-| AC1027 | 2013 | ✅ | ✅ | ✅ | ✅ |
-| AC1032 | 2018+ | ✅ | ✅ | ✅ | ✅ |
+## Features
 
-### Supported Entity Types (41)
+- **DXF Read/Write** — ASCII and Binary formats, R12–R2018+
+- **DWG Read/Write** — Native binary, R13–R2018 (208/208 roundtrip-perfect)
+- **41 Entity Types** — Lines, arcs, polylines, hatches, dimensions, 3D solids, viewports, and more
+- **3D Solid Creation** — ACIS SAT/SAB builder for box, cylinder, cone, sphere, torus, wedge, pyramid
+- **Paper Space & Layouts** — Multiple layouts, viewport-to-layout ownership, `add_layout()` API
+- **Tables & Objects** — Layers, linetypes, styles, dictionaries, layouts, materials
+- **Serde Support** — Optional `Serialize`/`Deserialize` for all types (`features = ["serde"]`)
+- **Failsafe Mode** — Error-tolerant parsing with structured diagnostics
+- **Encoding Support** — ~40 code pages for pre-2007 files
+
+## File Version Support
+
+| Version | AutoCAD | DXF | DWG |
+|---------|---------|-----|-----|
+| AC1009 | R12 | ✅ | — |
+| AC1012–AC1014 | R13–R14 | ✅ | ✅ |
+| AC1015–AC1032 | 2000–2018+ | ✅ | ✅ |
+
+## Examples
 
 <details>
-<summary>Click to expand full entity list</summary>
+<summary>DWG Read/Write</summary>
 
-#### Basic Entities
-- **Point** — Single point in 3D space
-- **Line** — Line segment between two points
-- **Circle** — Circle defined by center and radius
-- **Arc** — Circular arc with start and end angles
-- **Ellipse** — Ellipse or elliptical arc
+```rust
+use acadrust::{CadDocument, DwgWriter};
+use acadrust::io::dwg::DwgReader;
+use acadrust::entities::*;
+use acadrust::types::{Color, Vector3};
 
-#### Polylines
-- **Polyline** — 2D polyline with optional bulge
-- **Polyline2D** — Heavy 2D polyline with vertex entities
-- **Polyline3D** — 3D polyline
-- **LwPolyline** — Lightweight polyline (optimized 2D)
-- **PolyfaceMesh** — 3D mesh defined by vertices and faces
-- **PolygonMesh** — 3D polygon surface mesh (M×N grid)
+fn main() -> acadrust::Result<()> {
+    // Read DWG
+    let mut reader = DwgReader::from_file("drawing.dwg")?;
+    let doc = reader.read()?;
 
-#### Text & Annotations
-- **Text** — Single-line text
-- **MText** — Multi-line formatted text
-- **AttributeDefinition** — Block attribute template
-- **AttributeEntity** — Block attribute instance
-- **Tolerance** — Geometric tolerancing symbols
-
-#### Dimensions & Leaders
-- **Dimension** — Various dimension types (linear, angular, radial, etc.)
-- **Leader** — Leader line with annotation
-- **MultiLeader** — Modern multi-leader with advanced formatting
-- **Table** — Table with cells, rows, and columns
-
-#### Complex Entities
-- **Spline** — NURBS curve
-- **Hatch** — Filled region with pattern
-- **Solid** — 2D filled polygon
-- **Face3D** — 3D triangular/quadrilateral face
-- **Mesh** — Subdivision mesh surface
-
-#### Blocks & References
-- **Block** / **BlockEnd** — Block definition markers
-- **Insert** — Block reference (instance)
-- **Seqend** — Sequence end marker for complex entities
-
-#### Construction Geometry
-- **Ray** — Semi-infinite line
-- **XLine** — Infinite construction line
-
-#### Advanced Entities
-- **Viewport** — Paper space viewport
-- **RasterImage** — Embedded or linked raster image
-- **Solid3D** — 3D solid with ACIS data (read & **write** — SAT v7.0 text and SAB binary)
-- **Region** — 2D region with ACIS data
-- **Body** — 3D body with ACIS data
-- **MLine** — Multi-line with style
-- **Wipeout** — Masking region
-- **Shape** — Shape reference
-- **Underlay** — PDF/DWF/DGN underlay reference
-- **Ole2Frame** — OLE 2.0 embedded object
-- **UnknownEntity** — Preserves common fields for unrecognized entity types
-
+    // Create & Write DWG
+    let mut doc = CadDocument::new();
+    let mut line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
+    line.common.color = Color::RED;
+    doc.add_entity(EntityType::Line(line))?;
+    DwgWriter::write_to_file("output.dwg", &doc)?;
+    Ok(())
+}
+```
 </details>
 
-### Table System
-
-Complete support for all standard tables:
-
-| Table | Description |
-|-------|-------------|
-| **Layer** | Drawing layers with color, linetype, and visibility |
-| **LineType** | Line patterns and dash definitions |
-| **TextStyle** | Font and text formatting settings |
-| **DimStyle** | Dimension appearance and behavior |
-| **BlockRecord** | Block definition registry |
-| **AppId** | Application identifier registry |
-| **View** | Named view configurations |
-| **VPort** | Viewport configurations |
-| **UCS** | User coordinate system definitions |
-
-### Objects (Non-Graphical Elements)
-
-- **Dictionary** / **DictionaryWithDefault** — Key-value storage for objects
-- **DictionaryVariable** — Named variable in a dictionary
-- **Group** — Named entity collections
-- **Layout** — Model/paper space layout definitions
-- **MLineStyle** — Multi-line style definitions
-- **MultiLeaderStyle** — Multi-leader style definitions
-- **TableStyle** — Table formatting styles
-- **PlotSettings** — Print/plot configurations
-- **Scale** — Annotation scale definitions
-- **ImageDefinition** / **ImageDefinitionReactor** — Raster image definitions and reactors
-- **XRecord** — Extended data records
-- **SortEntitiesTable** — Entity draw order
-- **VisualStyle** — 3D visual style definitions
-- **Material** — Material definitions
-- **GeoData** — Geolocation data
-- **SpatialFilter** — Spatial clipping filter
-- **RasterVariables** — Raster display settings
-- **BookColor** — Color book (DBCOLOR) entries
-- **PlaceHolder** — Placeholder objects
-- **WipeoutVariables** — Wipeout display settings
-
-### CLASSES Section
-
-Full support for the CLASSES section — reading, storing, and writing DXF class definitions with all standard fields (class name, DXF name, application name, proxy flags, instance count).
-
-### Extended Data (XData)
-
-Full support for application-specific extended data:
-
-- String, binary, and numeric values
-- 3D points, directions, and displacements
-- Layer references and database handles
-- Nested data structures with control strings
-
-### Reactors & Extension Dictionaries
-
-Full support for entity/object reactor chains (group code 102 `{ACAD_REACTORS}`) and extension dictionaries (`{ACAD_XDICTIONARY}`), read and written for all entity and object types.
-
----
-
-## 📦 Installation
-
-Add acadrust to your `Cargo.toml`:
-
-```toml
-[dependencies]
-acadrust = "0.2.9"
-```
-
-Or install via cargo:
-
-```bash
-cargo add acadrust
-```
-
-### Optional Features
-
-| Feature | Description |
-|---------|-------------|
-| `serde` | Enables `Serialize` / `Deserialize` on all document types for JSON, YAML, etc. |
-
-```toml
-[dependencies]
-acadrust = { version = "0.2.9", features = ["serde"] }
-```
-
----
-
-## 🚀 Quick Start
-
-### Reading a DXF File
+<details>
+<summary>Paper Space Layouts & Viewports</summary>
 
 ```rust
-use acadrust::{CadDocument, DxfReader};
+use acadrust::{CadDocument, DxfVersion, DxfWriter};
+use acadrust::entities::{EntityType, Viewport};
+use acadrust::types::Vector3;
 
 fn main() -> acadrust::Result<()> {
-    // Open and read a DXF file
-    let doc = DxfReader::from_file("drawing.dxf")?.read()?;
-    
-    // Access document properties
-    println!("Version: {:?}", doc.header().version);
-    
-    // Iterate over entities in model space
-    for entity in doc.entities() {
-        println!("Entity: {:?}", entity);
-    }
-    
-    // Check parse notifications
-    for note in doc.notifications.iter() {
-        println!("[{:?}] {}", note.level, note.message);
-    }
-    
-    Ok(())
-}
-```
+    let mut doc = CadDocument::with_version(DxfVersion::AC1027);
 
-### Reading with Failsafe Mode
-
-```rust
-use acadrust::{DxfReader};
-use acadrust::io::dxf::DxfReaderConfiguration;
-
-fn main() -> acadrust::Result<()> {
-    let config = DxfReaderConfiguration { failsafe: true };
-    let doc = DxfReader::from_file("drawing.dxf")?
-        .with_configuration(config)
-        .read()?;
-    
-    // Even if some sections had errors, the document is partially populated
-    println!("Entities read: {}", doc.entities().len());
-    println!("Notifications: {}", doc.notifications.len());
-    
-    Ok(())
-}
-```
-
-### Writing a DXF File
-
-```rust
-use acadrust::{CadDocument, DxfWriter, Line, Layer, Vector3};
-
-fn main() -> acadrust::Result<()> {
-    // Create a new document
-    let mut doc = CadDocument::new();
-    
-    // Add a layer
-    let layer = Layer::new("MyLayer");
-    doc.layers_mut().add(layer)?;
-    
-    // Create and add a line
-    let line = Line {
+    // Add geometry to model space
+    let line = acadrust::entities::Line {
         start: Vector3::new(0.0, 0.0, 0.0),
         end: Vector3::new(100.0, 100.0, 0.0),
         ..Default::default()
     };
-    doc.add_entity(line);
-    
-    // Write to file
-    DxfWriter::new(&doc).write_to_file("output.dxf")?;
-    
+    doc.add_entity(EntityType::Line(line))?;
+
+    // Add viewport to default Layout1
+    let mut vp = Viewport::new();
+    vp.id = 1;
+    vp.center = Vector3::new(148.5, 105.0, 0.0);
+    vp.width = 297.0;
+    vp.height = 210.0;
+    doc.add_paper_space_entity(EntityType::Viewport(vp))?;
+
+    // Create additional layouts
+    doc.add_layout("Layout2")?;
+    let mut vp2 = Viewport::with_size(Vector3::new(200.0, 150.0, 0.0), 400.0, 300.0);
+    vp2.id = 1;
+    doc.add_entity_to_layout(EntityType::Viewport(vp2), "Layout2")?;
+
+    DxfWriter::new(doc).write_to_file("layouts.dxf")?;
     Ok(())
 }
 ```
+</details>
 
-### Serialization (optional `serde` feature)
-
-Serialize individual entities:
-
-```rust
-use acadrust::entities::Line;
-
-let line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
-let json = serde_json::to_string_pretty(&line).unwrap();
-println!("{json}");
-```
-
-Round-trip a full document:
+<details>
+<summary>Serde / JSON</summary>
 
 ```rust
 use acadrust::{CadDocument, DxfReader};
 
 fn main() -> acadrust::Result<()> {
     let doc = DxfReader::from_file("drawing.dxf")?.read()?;
-
-    // Serialize the entire document to JSON
     let json = serde_json::to_string_pretty(&doc).unwrap();
-
-    // Deserialize back
     let doc2: CadDocument = serde_json::from_str(&json).unwrap();
     println!("Entities: {}", doc2.entities().count());
-
     Ok(())
 }
 ```
+</details>
 
-Extract entities as a JSON array for a web API:
+## Documentation
 
-```rust
-use acadrust::{CadDocument, DxfReader};
-use acadrust::entities::EntityType;
-
-fn main() -> acadrust::Result<()> {
-    let doc = DxfReader::from_file("drawing.dxf")?.read()?;
-    let entities: Vec<&EntityType> = doc.entities().collect();
-    let api_response = serde_json::to_string_pretty(&entities).unwrap();
-    println!("{api_response}");
-    Ok(())
-}
-```
-
-All entities, tables, objects, and types implement `Serialize` and `Deserialize`
-when the `serde` feature is enabled, making it easy to build web APIs, store
-drawings in databases, or convert between formats.
-
-See the full example: [`examples/serde_json.rs`](examples/serde_json.rs)
-
-### Creating 3D Solids (ACIS)
-
-acadrust includes a SAT/SAB builder for creating ACIS 3DSOLID entities from scratch.
-The builder emits SAT v7.0 text for R2000–R2007 and SAB binary for R2013+.
-
-```rust
-use acadrust::{CadDocument, DwgWriter, DxfVersion, EntityType};
-use acadrust::entities::Solid3D;
-use acadrust::entities::acis::{SatDocument, SatPointer, Sense, Sidedness};
-
-fn main() -> acadrust::Result<()> {
-    // Start a new ACIS body
-    let mut sat = SatDocument::new_body();
-    let body_idx = SatPointer::new(0);
-
-    // Geometry: 6 plane surfaces for a 10×10×10 box
-    let surf_top    = sat.add_plane_surface([0.0, 0.0,  5.0], [0.0, 0.0,  1.0], [1.0, 0.0, 0.0]);
-    let surf_bottom = sat.add_plane_surface([0.0, 0.0, -5.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0]);
-    // ... add remaining surfaces, curves, vertices, edges, coedges, loops, faces, shell, lump
-
-    // Wrap in a Solid3D and write to DWG
-    let mut solid = Solid3D::new();
-    solid.set_sat_document(&sat);
-
-    let mut doc = CadDocument::with_version(DxfVersion::AC1027); // R2013
-    doc.add_entity(EntityType::Solid3D(solid))?;
-    DwgWriter::write_to_file("box.dwg", &doc)?;
-
-    Ok(())
-}
-```
-
-Available surface/curve builders:
-
-| Method | Description |
-|--------|-------------|
-| `add_plane_surface` | Infinite plane (origin, normal, u-axis) |
-| `add_cone_surface` | Cone / cylinder (center, axis, major-axis, ratio, half-angle) |
-| `add_sphere_surface` | Sphere (center, axis, radius) |
-| `add_torus_surface` | Torus (center, axis, major/minor radii) |
-| `add_straight_curve` | Infinite line (point, direction) |
-| `add_ellipse_curve` | Ellipse / circle (center, normal, major-axis, ratio) |
-
-See the full example: [`examples/write_3dsolid_dwg.rs`](examples/write_3dsolid_dwg.rs) — builds a box, wedge, pyramid, and cylinder.
-
-### Reading a DWG File
-
-```rust
-use acadrust::io::dwg::DwgReader;
-
-fn main() -> acadrust::Result<()> {
-    let mut reader = DwgReader::from_file("drawing.dwg")?;
-    let doc = reader.read()?;
-    
-    println!("Version: {:?}", doc.header().version);
-    println!("Entities: {}", doc.entities().len());
-    
-    for entity in doc.entities() {
-        println!("Entity: {:?}", entity);
-    }
-    
-    Ok(())
-}
-```
-
-### Writing a DWG File
-
-```rust
-use acadrust::{CadDocument, DwgWriter};
-use acadrust::entities::*;
-use acadrust::types::{Color, DxfVersion, Vector3};
-
-fn main() -> acadrust::Result<()> {
-    // Create a document (default: R2018)
-    let mut doc = CadDocument::new();
-    
-    // Or target a specific version
-    // let mut doc = CadDocument::with_version(DxfVersion::AC1015); // R2000
-    
-    // Add entities
-    let mut line = Line::from_coords(0.0, 0.0, 0.0, 100.0, 50.0, 0.0);
-    line.common.color = Color::RED;
-    doc.add_entity(EntityType::Line(line))?;
-    
-    let mut circle = Circle::from_coords(50.0, 25.0, 0.0, 15.0);
-    circle.common.color = Color::BLUE;
-    doc.add_entity(EntityType::Circle(circle))?;
-    
-    // Write to DWG
-    DwgWriter::write_to_file("output.dwg", &doc)?;
-    
-    // Or write to a Vec<u8>
-    let bytes = DwgWriter::write_to_vec(&doc)?;
-    
-    Ok(())
-}
-```
-
-### Working with Layers
-
-```rust
-use acadrust::{CadDocument, Layer, Color};
-
-fn main() -> acadrust::Result<()> {
-    let mut doc = CadDocument::new();
-    
-    // Create a custom layer
-    let mut layer = Layer::new("Annotations");
-    layer.color = Color::from_index(1); // Red
-    layer.is_frozen = false;
-    layer.is_locked = false;
-    
-    doc.layers_mut().add(layer)?;
-    
-    // Access existing layers
-    if let Some(layer) = doc.layers().get("0") {
-        println!("Default layer color: {:?}", layer.color);
-    }
-    
-    Ok(())
-}
-```
-
-### Creating Complex Entities
-
-```rust
-use acadrust::{CadDocument, LwPolyline, LwVertex, Vector2, Circle, Arc};
-
-fn main() -> acadrust::Result<()> {
-    let mut doc = CadDocument::new();
-    
-    // Create a rectangle using LwPolyline
-    let mut polyline = LwPolyline::new();
-    polyline.vertices = vec![
-        LwVertex { position: Vector2::new(0.0, 0.0), ..Default::default() },
-        LwVertex { position: Vector2::new(100.0, 0.0), ..Default::default() },
-        LwVertex { position: Vector2::new(100.0, 50.0), ..Default::default() },
-        LwVertex { position: Vector2::new(0.0, 50.0), ..Default::default() },
-    ];
-    polyline.is_closed = true;
-    doc.add_entity(polyline);
-    
-    // Create a circle
-    let circle = Circle {
-        center: Vector3::new(50.0, 25.0, 0.0),
-        radius: 10.0,
-        ..Default::default()
-    };
-    doc.add_entity(circle);
-    
-    Ok(())
-}
-```
+Full API docs: [docs.rs/acadrust](https://docs.rs/acadrust)
 
 ---
 
-## 🏗️ Architecture
+## Changelog
 
-acadrust uses a trait-based design for maximum flexibility and extensibility:
+### 0.2.10
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                       CadDocument                            │
-├──────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────┐  │
-│  │   Header    │  │    Tables    │  │      Entities       │  │
-│  │  Variables  │  │              │  │                     │  │
-│  └─────────────┘  │ - Layers     │  │ - Lines, Circles    │  │
-│                   │ - LineTypes  │  │ - Polylines, Arcs   │  │
-│  ┌─────────────┐  │ - Styles     │  │ - Text, Dimensions  │  │
-│  │   Blocks    │  │ - DimStyles  │  │ - Hatches, Splines  │  │
-│  │             │  │ - VPorts     │  │ - 3D, Mesh, Images  │  │
-│  └─────────────┘  └──────────────┘  └─────────────────────┘  │
-│                                                              │
-│  ┌──────────────────────────────────┐  ┌──────────────────┐  │
-│  │            Objects               │  │  Notifications   │  │
-│  │  Dictionaries, Groups, Styles,   │  │  Warnings, Errors│  │
-│  │  Layouts, XRecords, Materials    │  │  Diagnostics     │  │
-│  └──────────────────────────────────┘  └──────────────────┘  │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────────┐│
-│  │                      Classes                             ││
-│  │  DXF class definitions (name, app, proxy flags, count)   ││
-│  └──────────────────────────────────────────────────────────┘│
-└──────────────────────────────────────────────────────────────┘
-```
+- **Paper space & layout support** — `add_paper_space_entity()`, `add_entity_to_layout()`, `add_layout()` API for creating viewports in multiple paper space layouts
+- **Correct DXF paper space structure** — Active layout (`*Paper_Space`) entities in ENTITIES section with code 67; non-active layouts (`*Paper_Space0`, `*Paper_Space1`, …) entities inside BLOCK definitions
+- **AutoCAD AUDIT compatibility** — Fixed code 67 paper space flag, MLineStyle angle conversion (radians→degrees), AcDbPlotSettings flag, viewport owner handles
+- **DXF reader** — Proper handling of code 67 (paper space flag) in common entity parsing
 
-### Core Traits
+### 0.2.9
 
-| Trait | Purpose |
-|-------|---------|
-| `Entity` | Base trait for all graphical entities |
-| `TableEntry` | Base trait for table entries (layers, styles, etc.) |
-| `CadObject` | Common interface for all CAD objects |
+- **ACIS 3DSOLID write support** — SAT text builder (R2000–R2007) and SAB binary (R2013+) with primitives: box, wedge, pyramid, cylinder, cone, sphere, torus
+- **`SatDocument` builder API** — `add_plane_surface`, `add_cone_surface`, `add_sphere_surface`, `add_torus_surface`, `add_straight_curve`, `add_ellipse_curve`
+- **208/208 DWG roundtrip integrity** — Zero field drift across 26 entity types × 8 versions
 
-### Key Types
+### 0.2.8
 
-| Type | Description |
-|------|-------------|
-| `CadDocument` | Central document container |
-| `DxfReader` | DXF file reader (ASCII and binary) |
-| `DxfWriter` | DXF file writer |
-| `DwgReader` | DWG binary file reader |
-| `DwgWriter` | DWG binary file writer |
-| `DxfReaderConfiguration` | Reader options (failsafe mode) |
-| `Handle` | Unique object identifier |
-| `Vector2` / `Vector3` | 2D and 3D coordinate types |
-| `Color` | CAD color (indexed or true color) |
-| `LineWeight` | Line thickness enumeration |
-| `Transform` | Transformation matrices |
-| `NotificationCollection` | Parse diagnostics and warnings |
+- **DWG binary read** — Full DWG reader for R13 through R2018
+- **DWG binary write** — Full DWG writer for R13 through R2018
+- **Handle resolution** — Automatic owner handle assignment after read
+
+### 0.2.7
+
+- **Optional serde support** — `Serialize`/`Deserialize` for all document types with `features = ["serde"]`
+- **JSON/YAML round-trip** — Full document serialization and deserialization
+
+### 0.2.6
+
+- **41 entity types** — Added MultiLeader, Table, MLine, Mesh, Underlay, Ole2Frame, Wipeout, Shape, and more
+- **Objects** — Dictionaries, Groups, Layouts, MLineStyle, MultiLeaderStyle, TableStyle, PlotSettings, Scale, Materials, VisualStyle, GeoData
+- **CLASSES section** — Full read/write support
+- **Extended data (XData)** — Full support for application-specific extended data
+- **Reactors & extension dictionaries** — Read/write for all entity and object types
+
+### 0.2.0–0.2.5
+
+- ASCII and Binary DXF read/write
+- Core entity types (Point, Line, Circle, Arc, Ellipse, Polyline, LwPolyline, Text, MText, Spline, Dimension, Hatch, Solid, Face3D, Insert, Viewport)
+- Table system (Layer, LineType, TextStyle, DimStyle, BlockRecord, AppId, View, VPort, UCS)
+- Encoding support (~40 code pages)
+- Failsafe reading mode
+- Unknown entity preservation
 
 ---
 
-## ⚙️ Dependencies
+## License
 
-acadrust is built on a foundation of high-quality Rust crates:
+MPL-2.0 — see [LICENSE](LICENSE).
 
-| Crate | Purpose |
-|-------|---------|
-| `thiserror` / `anyhow` | Error handling |
-| `nom` | Parser combinators for binary parsing |
-| `byteorder` | Cross-platform byte order handling |
-| `flate2` | Compression/decompression |
-| `nalgebra` | Linear algebra and transformations |
-| `indexmap` | Ordered hash maps |
-| `rayon` | Parallel iterators |
-| `encoding_rs` | Character encoding support |
-| `bitflags` | Type-safe bitflags |
-| `once_cell` | Lazy static initialization |
-| `ahash` | Fast hashing |
-| `serde` | Serialization/deserialization (optional) |
+## Acknowledgments
 
----
-
-## 🧪 Testing
-
-Run the test suite:
-
-```bash
-# Run all tests
-cargo test
-
-# Run with output
-cargo test -- --nocapture
-
-# Run specific test
-cargo test test_read_minimal_dxf
-```
-
-### Generate DWG Samples
-
-Generate a comprehensive matrix of every entity type × every DWG version (R13–R2018) for verification in AutoCAD, IntelliCAD, or BricsCAD:
-
-```bash
-cargo run --example gen_all_entities_all_versions
-```
-
-This produces 216 DWG files in `target/entities_dwg/<VERSION>/` — 27 entity types across 8 versions.
-
-### Roundtrip Data Integrity Test
-
-Verify lossless write→read→write→read fidelity across all 26 entity types × 8 DWG versions (208 test cases):
-
-```bash
-cargo run --example test_roundtrip
-```
-
-All 208 roundtrips pass with **zero data drift** — 0 Trip1 field losses, 0 Trip2 divergence, 0 write failures.
-
-Run benchmarks:
-
-```bash
-cargo bench
-```
-
----
-
-## ️ Roadmap
-
-- [x] ASCII DXF read/write
-- [x] Binary DXF read/write
-- [x] Full entity, table, and object coverage
-- [x] CLASSES section support
-- [x] Character encoding / code page support
-- [x] Failsafe (error-tolerant) reading mode
-- [x] Unknown entity preservation
-- [x] DWG binary write (R13, R14, R2000, R2004, R2007, R2010, R2013, R2018)
-- [x] DWG binary read (R13 through R2018)
-- [x] 208/208 roundtrip data integrity (0 field drift across all entity types × all versions)
-- [x] Optional serde support (`Serialize` / `Deserialize` for all types)
-- [x] ACIS 3DSOLID read/write — SAT text (R2000–R2007) and SAB binary (R2013+) with builder API
-- [ ] Geometric operations (offset, trim, extend)
-- [ ] SVG/PDF export
-- [ ] Spatial indexing for large drawings
-
----
-
-## 📄 License
-
-This project is licensed under the Mozilla Public License 2.0 - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- [ACadSharp](https://github.com/DomCR/ACadSharp) - The C# library that inspired this project
-- The Rust community for excellent tooling and libraries
-
----
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/hakanaktt/acadrust/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/hakanaktt/acadrust/discussions)
-
----
-
-<p align="center">
-  Made with ❤️ in Rust
-</p>
+- [ACadSharp](https://github.com/DomCR/ACadSharp) — the C# library that inspired this project
 
