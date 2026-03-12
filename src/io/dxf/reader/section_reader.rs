@@ -2576,11 +2576,10 @@ impl<'a> SectionReader<'a> {
 
         let mut lwpolyline = LwPolyline::new();
         let mut normal = PointReader::new();
-        let mut vertices_x: Vec<f64> = Vec::new();
-        let mut vertices_y: Vec<f64> = Vec::new();
-        let mut bulges: Vec<f64> = Vec::new();
-        let mut widths_start: Vec<f64> = Vec::new();
-        let mut widths_end: Vec<f64> = Vec::new();
+        // Track per-vertex state: code 10 starts a new vertex, codes 20/40/41/42
+        // apply to the current vertex. Omitted codes default to 0.0.
+        let mut vertices: Vec<LwVertex> = Vec::new();
+        let mut current_x: Option<f64> = None;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -2621,28 +2620,41 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 10 => {
+                    // Code 10 starts a new vertex with defaults
                     if let Some(x) = pair.as_double() {
-                        vertices_x.push(x);
+                        current_x = Some(x);
                     }
                 }
                 20 => {
-                    if let Some(y) = pair.as_double() {
-                        vertices_y.push(y);
+                    // Code 20 completes the vertex position; push a new vertex
+                    if let (Some(x), Some(y)) = (current_x.take(), pair.as_double()) {
+                        vertices.push(LwVertex {
+                            location: Vector2::new(x, y),
+                            bulge: 0.0,
+                            start_width: 0.0,
+                            end_width: 0.0,
+                        });
                     }
                 }
                 42 => {
                     if let Some(bulge) = pair.as_double() {
-                        bulges.push(bulge);
+                        if let Some(v) = vertices.last_mut() {
+                            v.bulge = bulge;
+                        }
                     }
                 }
                 40 => {
                     if let Some(width) = pair.as_double() {
-                        widths_start.push(width);
+                        if let Some(v) = vertices.last_mut() {
+                            v.start_width = width;
+                        }
                     }
                 }
                 41 => {
                     if let Some(width) = pair.as_double() {
-                        widths_end.push(width);
+                        if let Some(v) = vertices.last_mut() {
+                            v.end_width = width;
+                        }
                     }
                 }
                 210 | 220 | 230 => { normal.add_coordinate(&pair); }
@@ -2650,19 +2662,7 @@ impl<'a> SectionReader<'a> {
             }
         }
 
-        // Build vertices from collected data
-        for i in 0..vertices_x.len().min(vertices_y.len()) {
-            let bulge = bulges.get(i).copied().unwrap_or(0.0);
-            let start_width = widths_start.get(i).copied().unwrap_or(0.0);
-            let end_width = widths_end.get(i).copied().unwrap_or(0.0);
-
-            lwpolyline.vertices.push(LwVertex {
-                location: Vector2::new(vertices_x[i], vertices_y[i]),
-                bulge,
-                start_width,
-                end_width,
-            });
-        }
+        lwpolyline.vertices = vertices;
 
         if let Some(n) = normal.get_point() {
             lwpolyline.normal = n;
@@ -5122,6 +5122,162 @@ mod tests {
             assert!((lw.constant_width - 0.5).abs() < 1e-9);
             assert!((lw.normal.y - 1.0).abs() < 1e-9);
             assert_eq!(lw.vertices.len(), 3);
+        } else {
+            panic!("Expected LwPolyline entity");
+        }
+    }
+
+    /// Roundtrip test: LWPOLYLINE with bulge/width on specific vertices
+    #[test]
+    fn test_dxf_roundtrip_lwpolyline_bulge_per_vertex() {
+        use crate::entities::lwpolyline::{LwPolyline, LwVertex};
+        use crate::types::Vector2;
+
+        let mut doc = CadDocument::new();
+        let mut lwpoly = LwPolyline::new();
+        lwpoly.vertices = vec![
+            LwVertex { location: Vector2::new(0.0, 0.0), bulge: 0.0, start_width: 0.0, end_width: 0.0 },
+            LwVertex { location: Vector2::new(10.0, 0.0), bulge: 0.5, start_width: 1.0, end_width: 2.0 },
+            LwVertex { location: Vector2::new(20.0, 0.0), bulge: 0.0, start_width: 0.0, end_width: 0.0 },
+            LwVertex { location: Vector2::new(30.0, 0.0), bulge: -0.3, start_width: 0.5, end_width: 0.5 },
+        ];
+        doc.add_entity(EntityType::LwPolyline(lwpoly));
+
+        let doc2 = roundtrip(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::LwPolyline(ref lw) = entities[0] {
+            assert_eq!(lw.vertices.len(), 4);
+            // Vertex 0: no bulge, no widths
+            assert!((lw.vertices[0].bulge).abs() < 1e-9, "v0 bulge should be 0.0, got {}", lw.vertices[0].bulge);
+            assert!((lw.vertices[0].start_width).abs() < 1e-9);
+            assert!((lw.vertices[0].end_width).abs() < 1e-9);
+            // Vertex 1: bulge=0.5, widths=1.0/2.0
+            assert!((lw.vertices[1].bulge - 0.5).abs() < 1e-9, "v1 bulge should be 0.5, got {}", lw.vertices[1].bulge);
+            assert!((lw.vertices[1].start_width - 1.0).abs() < 1e-9);
+            assert!((lw.vertices[1].end_width - 2.0).abs() < 1e-9);
+            // Vertex 2: no bulge, no widths
+            assert!((lw.vertices[2].bulge).abs() < 1e-9, "v2 bulge should be 0.0, got {}", lw.vertices[2].bulge);
+            assert!((lw.vertices[2].start_width).abs() < 1e-9);
+            assert!((lw.vertices[2].end_width).abs() < 1e-9);
+            // Vertex 3: bulge=-0.3, widths=0.5/0.5
+            assert!((lw.vertices[3].bulge - (-0.3)).abs() < 1e-9, "v3 bulge should be -0.3, got {}", lw.vertices[3].bulge);
+            assert!((lw.vertices[3].start_width - 0.5).abs() < 1e-9);
+            assert!((lw.vertices[3].end_width - 0.5).abs() < 1e-9);
+        } else {
+            panic!("Expected LwPolyline entity");
+        }
+    }
+
+    /// Parse hand-crafted DXF where code 42 is omitted for zero-bulge vertices.
+    /// This is the exact scenario that caused the original misalignment bug.
+    #[test]
+    fn test_dxf_read_lwpolyline_sparse_bulge() {
+        // Minimal DXF: LWPOLYLINE with 4 vertices, code 42 only on vertex 1
+        let dxf = "\
+  0\r\nSECTION\r\n\
+  2\r\nENTITIES\r\n\
+  0\r\nLWPOLYLINE\r\n\
+  5\r\n1\r\n\
+100\r\nAcDbEntity\r\n\
+  8\r\n0\r\n\
+100\r\nAcDbPolyline\r\n\
+ 90\r\n4\r\n\
+ 70\r\n0\r\n\
+ 38\r\n0.0\r\n\
+ 10\r\n0.0\r\n\
+ 20\r\n0.0\r\n\
+ 10\r\n10.0\r\n\
+ 20\r\n0.0\r\n\
+ 42\r\n0.5\r\n\
+ 10\r\n20.0\r\n\
+ 20\r\n0.0\r\n\
+ 10\r\n30.0\r\n\
+ 20\r\n0.0\r\n\
+  0\r\nENDSEC\r\n\
+  0\r\nEOF\r\n";
+
+        let cursor = std::io::Cursor::new(dxf.as_bytes());
+        let reader = crate::io::dxf::reader::DxfReader::from_reader(cursor).expect("from_reader");
+        let doc = reader.read().expect("read");
+
+        let entities: Vec<_> = doc.entities().collect();
+        assert_eq!(entities.len(), 1, "Expected 1 entity, got {}", entities.len());
+        if let EntityType::LwPolyline(ref lw) = entities[0] {
+            assert_eq!(lw.vertices.len(), 4);
+            assert!((lw.vertices[0].location.x - 0.0).abs() < 1e-9);
+            assert!((lw.vertices[1].location.x - 10.0).abs() < 1e-9);
+            assert!((lw.vertices[2].location.x - 20.0).abs() < 1e-9);
+            assert!((lw.vertices[3].location.x - 30.0).abs() < 1e-9);
+            // The critical check: bulge 0.5 must be on vertex 1, not vertex 0
+            assert!((lw.vertices[0].bulge).abs() < 1e-9, "v0 bulge should be 0.0, got {}", lw.vertices[0].bulge);
+            assert!((lw.vertices[1].bulge - 0.5).abs() < 1e-9, "v1 bulge should be 0.5, got {}", lw.vertices[1].bulge);
+            assert!((lw.vertices[2].bulge).abs() < 1e-9, "v2 bulge should be 0.0, got {}", lw.vertices[2].bulge);
+            assert!((lw.vertices[3].bulge).abs() < 1e-9, "v3 bulge should be 0.0, got {}", lw.vertices[3].bulge);
+        } else {
+            panic!("Expected LwPolyline entity");
+        }
+    }
+
+    /// Parse hand-crafted DXF where codes 40/41/42 are all sparse across vertices.
+    #[test]
+    fn test_dxf_read_lwpolyline_sparse_widths_and_bulge() {
+        // vertex 0: no optional codes
+        // vertex 1: only code 42 (bulge)
+        // vertex 2: only codes 40/41 (widths)
+        // vertex 3: codes 40/41/42 all present
+        let dxf = "\
+  0\r\nSECTION\r\n\
+  2\r\nENTITIES\r\n\
+  0\r\nLWPOLYLINE\r\n\
+  5\r\n1\r\n\
+100\r\nAcDbEntity\r\n\
+  8\r\n0\r\n\
+100\r\nAcDbPolyline\r\n\
+ 90\r\n4\r\n\
+ 70\r\n0\r\n\
+ 38\r\n0.0\r\n\
+ 10\r\n0.0\r\n\
+ 20\r\n0.0\r\n\
+ 10\r\n10.0\r\n\
+ 20\r\n0.0\r\n\
+ 42\r\n0.5\r\n\
+ 10\r\n20.0\r\n\
+ 20\r\n0.0\r\n\
+ 40\r\n1.0\r\n\
+ 41\r\n2.0\r\n\
+ 10\r\n30.0\r\n\
+ 20\r\n0.0\r\n\
+ 40\r\n0.5\r\n\
+ 41\r\n0.5\r\n\
+ 42\r\n-0.3\r\n\
+  0\r\nENDSEC\r\n\
+  0\r\nEOF\r\n";
+
+        let cursor = std::io::Cursor::new(dxf.as_bytes());
+        let reader = crate::io::dxf::reader::DxfReader::from_reader(cursor).expect("from_reader");
+        let doc = reader.read().expect("read");
+
+        let entities: Vec<_> = doc.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::LwPolyline(ref lw) = entities[0] {
+            assert_eq!(lw.vertices.len(), 4);
+            // Vertex 0: all defaults
+            assert!((lw.vertices[0].bulge).abs() < 1e-9);
+            assert!((lw.vertices[0].start_width).abs() < 1e-9);
+            assert!((lw.vertices[0].end_width).abs() < 1e-9);
+            // Vertex 1: only bulge
+            assert!((lw.vertices[1].bulge - 0.5).abs() < 1e-9, "v1 bulge wrong: {}", lw.vertices[1].bulge);
+            assert!((lw.vertices[1].start_width).abs() < 1e-9);
+            assert!((lw.vertices[1].end_width).abs() < 1e-9);
+            // Vertex 2: only widths
+            assert!((lw.vertices[2].bulge).abs() < 1e-9);
+            assert!((lw.vertices[2].start_width - 1.0).abs() < 1e-9, "v2 start_width wrong: {}", lw.vertices[2].start_width);
+            assert!((lw.vertices[2].end_width - 2.0).abs() < 1e-9, "v2 end_width wrong: {}", lw.vertices[2].end_width);
+            // Vertex 3: all present
+            assert!((lw.vertices[3].bulge - (-0.3)).abs() < 1e-9, "v3 bulge wrong: {}", lw.vertices[3].bulge);
+            assert!((lw.vertices[3].start_width - 0.5).abs() < 1e-9);
+            assert!((lw.vertices[3].end_width - 0.5).abs() < 1e-9);
         } else {
             panic!("Expected LwPolyline entity");
         }
