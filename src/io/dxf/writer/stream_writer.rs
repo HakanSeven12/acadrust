@@ -56,18 +56,18 @@ pub trait DxfStreamWriterExt: DxfStreamWriter {
         Ok(())
     }
     
-    /// Write a color index
+    /// Write a color on the given code as an ACI index.
+    ///
+    /// For `Rgb` colors an approximate ACI index is written so that older
+    /// readers can still display a reasonable colour.  The caller is
+    /// responsible for also emitting code 420 (true colour) when required.
     #[inline]
     fn write_color(&mut self, code: i32, color: Color) -> Result<()> {
         match color {
             Color::ByLayer => self.write_i16(code, 256),
             Color::ByBlock => self.write_i16(code, 0),
             Color::Index(index) => self.write_i16(code, index as i16),
-            Color::Rgb { r, g, b } => {
-                // Write as true color (code 420)
-                let true_color = ((r as i32) << 16) | ((g as i32) << 8) | (b as i32);
-                self.write_i32(420, true_color)
-            }
+            Color::Rgb { .. } => self.write_i16(code, color.approximate_index()),
         }
     }
     

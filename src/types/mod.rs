@@ -11,6 +11,7 @@
 //! - [`Transform`] / [`Matrix4`] — affine transformation types
 //! - [`BoundingBox2D`] / [`BoundingBox3D`] — axis-aligned bounds
 
+pub mod aci_table;
 pub mod bounds;
 pub mod color;
 pub mod handle;
@@ -19,6 +20,7 @@ pub mod transform;
 pub mod transparency;
 pub mod vector;
 
+pub use aci_table::{ACI_COLORS, aci_to_rgb, nearest_aci};
 pub use bounds::{BoundingBox2D, BoundingBox3D};
 pub use color::Color;
 pub use handle::Handle;

@@ -2093,6 +2093,24 @@ impl<'a> SectionReader<'a> {
             92 | 160 | 310 => {
                 Ok(true)
             }
+            // True color (code 420): packed 24-bit RGB overrides ACI index.
+            420 => {
+                if let Some(v) = pair.as_i32() {
+                    common.color = Color::from_true_color_value(v);
+                }
+                Ok(true)
+            }
+            // Color book name (code 430): consumed but not stored on EntityCommon.
+            430 => {
+                Ok(true)
+            }
+            // Transparency (code 440): packed alpha value.
+            440 => {
+                if let Some(v) = pair.as_i32() {
+                    common.transparency = Transparency::from_alpha_value(v as u32);
+                }
+                Ok(true)
+            }
             // Paper space flag (67 = 1 means entity is in paper space).
             // Ownership is determined by code 330, so we just consume this.
             67 => {
@@ -3043,6 +3061,10 @@ impl<'a> SectionReader<'a> {
         }
 
         // Build the appropriate dimension type
+        // True color from code 420 (stored in common by try_read_common_entity_code) overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         let pt1 = first_point.get_point().unwrap_or(Vector3::zero());
         let pt2 = second_point.get_point().unwrap_or(Vector3::zero());
         let pt3 = third_point.get_point().unwrap_or(Vector3::zero());
@@ -3145,6 +3167,7 @@ impl<'a> SectionReader<'a> {
             dc.common.invisible = common.invisible;
             dc.common.linetype = common.linetype;
             dc.common.linetype_scale = common.linetype_scale;
+            dc.common.transparency = common.transparency;
         }
 
         Ok(Some(dimension))
@@ -3299,7 +3322,10 @@ impl<'a> SectionReader<'a> {
         }
 
         hatch.common.layer = layer;
-        hatch.common.color = color;
+        // True color from code 420 overrides ACI (420 went directly into hatch.common)
+        if !hatch.common.color.is_true_color() {
+            hatch.common.color = color;
+        }
         hatch.common.line_weight = line_weight;
         hatch.pattern.name = pattern_name;
         hatch.pattern_type = pattern_type;
@@ -3593,6 +3619,10 @@ impl<'a> SectionReader<'a> {
 
         let mut solid = Solid::new(pt1, pt2, pt3, pt4);
         solid.common.layer = layer;
+        // True color from code 420 overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         solid.common.color = color;
         solid.common.line_weight = line_weight;
         solid.common.handle = common.handle;
@@ -3602,6 +3632,7 @@ impl<'a> SectionReader<'a> {
         solid.common.invisible = common.invisible;
         solid.common.linetype = common.linetype;
         solid.common.linetype_scale = common.linetype_scale;
+        solid.common.transparency = common.transparency;
         solid.thickness = thickness;
         if let Some(n) = normal.get_point() {
             solid.normal = n;
@@ -3667,6 +3698,10 @@ impl<'a> SectionReader<'a> {
 
         let mut face = Face3D::new(pt1, pt2, pt3, pt4);
         face.common.layer = layer;
+        // True color from code 420 overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         face.common.color = color;
         face.common.line_weight = line_weight;
         face.invisible_edges = invisible_edges;
@@ -3677,6 +3712,7 @@ impl<'a> SectionReader<'a> {
         face.common.invisible = common.invisible;
         face.common.linetype = common.linetype;
         face.common.linetype_scale = common.linetype_scale;
+        face.common.transparency = common.transparency;
 
         Ok(Some(face))
     }
@@ -3771,6 +3807,10 @@ impl<'a> SectionReader<'a> {
         let insert_point = insertion.get_point().unwrap_or(Vector3::zero());
         let mut insert = Insert::new(block_name, insert_point);
         insert.common.layer = layer;
+        // True color from code 420 overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         insert.common.color = color;
         insert.common.line_weight = line_weight;
         insert.set_x_scale(x_scale);
@@ -3788,6 +3828,7 @@ impl<'a> SectionReader<'a> {
         insert.common.invisible = common.invisible;
         insert.common.linetype = common.linetype;
         insert.common.linetype_scale = common.linetype_scale;
+        insert.common.transparency = common.transparency;
         if let Some(n) = normal.get_point() {
             insert.normal = n;
         }
@@ -3861,6 +3902,10 @@ impl<'a> SectionReader<'a> {
         let dir = direction.get_point().unwrap_or(Vector3::new(1.0, 0.0, 0.0));
         let mut ray = Ray::new(bp, dir);
         ray.common.layer = layer;
+        // True color from code 420 overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         ray.common.color = color;
         ray.common.handle = common.handle;
         ray.common.owner_handle = common.owner_handle;
@@ -3869,6 +3914,7 @@ impl<'a> SectionReader<'a> {
         ray.common.invisible = common.invisible;
         ray.common.linetype = common.linetype;
         ray.common.linetype_scale = common.linetype_scale;
+        ray.common.transparency = common.transparency;
 
         Ok(Some(ray))
     }
@@ -3904,6 +3950,10 @@ impl<'a> SectionReader<'a> {
         let dir = direction.get_point().unwrap_or(Vector3::new(1.0, 0.0, 0.0));
         let mut xline = XLine::new(bp, dir);
         xline.common.layer = layer;
+        // True color from code 420 overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         xline.common.color = color;
         xline.common.handle = common.handle;
         xline.common.owner_handle = common.owner_handle;
@@ -3912,6 +3962,7 @@ impl<'a> SectionReader<'a> {
         xline.common.invisible = common.invisible;
         xline.common.linetype = common.linetype;
         xline.common.linetype_scale = common.linetype_scale;
+        xline.common.transparency = common.transparency;
 
         Ok(Some(xline))
     }
@@ -3964,6 +4015,10 @@ impl<'a> SectionReader<'a> {
         attdef.height = height;
         attdef.rotation = rotation;
         attdef.common.layer = layer;
+        // True color from code 420 overrides ACI
+        if common.color.is_true_color() {
+            color = common.color;
+        }
         attdef.common.color = color;
         attdef.common.handle = common.handle;
         attdef.common.owner_handle = common.owner_handle;
@@ -3972,6 +4027,7 @@ impl<'a> SectionReader<'a> {
         attdef.common.invisible = common.invisible;
         attdef.common.linetype = common.linetype;
         attdef.common.linetype_scale = common.linetype_scale;
+        attdef.common.transparency = common.transparency;
 
         Ok(Some(attdef))
     }

@@ -930,6 +930,13 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
             self.writer.write_color(62, common.color)?;
         }
 
+        // True color (code 420) — only for AC1018+ (AutoCAD 2004+)
+        if self.dxf_version >= DxfVersion::AC1018 {
+            if let Some(tc) = common.color.to_true_color_value() {
+                self.writer.write_i32(420, tc)?;
+            }
+        }
+
         // Write linetype scale if not 1.0
         if (common.linetype_scale - 1.0).abs() > 1e-12 {
             self.writer.write_double(48, common.linetype_scale)?;
@@ -943,6 +950,11 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         // Write visibility
         if common.invisible {
             self.writer.write_i16(60, 1)?;
+        }
+
+        // Transparency (code 440) — only for AC1018+ and non-opaque
+        if self.dxf_version >= DxfVersion::AC1018 && !common.transparency.is_opaque() {
+            self.writer.write_i32(440, common.transparency.to_dxf_value())?;
         }
 
         Ok(())
@@ -1351,6 +1363,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
 
         self.writer.write_subclass("AcDbEntity")?;
         self.writer.write_string(8, &base.common.layer)?;
+
+        // Write color if not ByLayer
+        if base.common.color != Color::ByLayer {
+            self.writer.write_color(62, base.common.color)?;
+        }
+        // True color (code 420) — only for AC1018+
+        if self.dxf_version >= DxfVersion::AC1018 {
+            if let Some(tc) = base.common.color.to_true_color_value() {
+                self.writer.write_i32(420, tc)?;
+            }
+        }
+        // Transparency (code 440) — only for AC1018+ and non-opaque
+        if self.dxf_version >= DxfVersion::AC1018 && !base.common.transparency.is_opaque() {
+            self.writer.write_i32(440, base.common.transparency.to_dxf_value())?;
+        }
+
         self.writer.write_subclass("AcDbDimension")?;
         self.writer.write_string(2, &base.block_name)?;
         self.writer.write_point3d(10, base.definition_point)?;

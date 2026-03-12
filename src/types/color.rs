@@ -1,6 +1,7 @@
 //! Color representation for CAD entities
 
 use std::fmt;
+use super::aci_table;
 
 /// Represents a color in AutoCAD
 ///
@@ -40,6 +41,28 @@ impl Color {
         Color::Rgb { r, g, b }
     }
 
+    /// Create a color from a packed 24-bit true color value (as in DXF code 420).
+    ///
+    /// The value is `(r << 16) | (g << 8) | b`.
+    pub fn from_true_color_value(value: i32) -> Self {
+        let r = ((value >> 16) & 0xFF) as u8;
+        let g = ((value >> 8) & 0xFF) as u8;
+        let b = (value & 0xFF) as u8;
+        Color::Rgb { r, g, b }
+    }
+
+    /// Pack this color as a 24-bit integer for DXF code 420.
+    ///
+    /// Returns `None` for non-RGB colors.
+    pub fn to_true_color_value(&self) -> Option<i32> {
+        match self {
+            Color::Rgb { r, g, b } => {
+                Some(((*r as i32) << 16) | ((*g as i32) << 8) | (*b as i32))
+            }
+            _ => None,
+        }
+    }
+
     /// Get the color index (if applicable)
     pub fn index(&self) -> Option<u16> {
         match self {
@@ -50,12 +73,30 @@ impl Color {
         }
     }
 
-    /// Get RGB values (if applicable)
+    /// Get RGB values.
+    ///
+    /// For `Index` colors, looks up the canonical ACI table.
+    /// For `Rgb` colors, returns the stored values directly.
+    /// Returns `None` for `ByLayer` and `ByBlock`.
     pub fn rgb(&self) -> Option<(u8, u8, u8)> {
+        match self {
+            Color::Rgb { r, g, b } => Some((*r, *g, *b)),
+            Color::Index(i) => aci_table::aci_to_rgb(*i),
+            _ => None,
+        }
+    }
+
+    /// Get RGB values only if this is a true color (not an index lookup).
+    pub fn true_color_rgb(&self) -> Option<(u8, u8, u8)> {
         match self {
             Color::Rgb { r, g, b } => Some((*r, *g, *b)),
             _ => None,
         }
+    }
+
+    /// Whether this is a true color (RGB) rather than an index color.
+    pub fn is_true_color(&self) -> bool {
+        matches!(self, Color::Rgb { .. })
     }
 
     /// Common color constants
@@ -69,36 +110,17 @@ impl Color {
     pub const GRAY: Color = Color::Index(8);
     pub const LIGHT_GRAY: Color = Color::Index(9);
     
-    /// Approximate a true color to the nearest ACI index
+    /// Find the nearest ACI index for this color.
+    ///
+    /// For `Index` colors returns the index directly.
+    /// For `Rgb` colors uses nearest-neighbor search against the canonical
+    /// 256-entry ACI table.
     pub fn approximate_index(&self) -> i16 {
         match self {
             Color::ByBlock => 0,
             Color::ByLayer => 256,
             Color::Index(i) => *i as i16,
-            Color::Rgb { r, g, b } => {
-                // Simple approximation to ACI color
-                // This is a rough approximation - a full implementation would use color tables
-                let brightness = ((*r as u16) + (*g as u16) + (*b as u16)) / 3;
-                if brightness < 32 {
-                    8 // dark gray
-                } else if brightness > 224 {
-                    7 // white
-                } else if *r > *g && *r > *b {
-                    1 // red
-                } else if *g > *r && *g > *b {
-                    3 // green
-                } else if *b > *r && *b > *g {
-                    5 // blue
-                } else if *r > 128 && *g > 128 {
-                    2 // yellow
-                } else if *g > 128 && *b > 128 {
-                    4 // cyan
-                } else if *r > 128 && *b > 128 {
-                    6 // magenta
-                } else {
-                    7 // white
-                }
-            }
+            Color::Rgb { r, g, b } => aci_table::nearest_aci(*r, *g, *b) as i16,
         }
     }
 }
@@ -129,6 +151,7 @@ mod tests {
     fn test_color_rgb() {
         let color = Color::from_rgb(255, 128, 64);
         assert_eq!(color.rgb(), Some((255, 128, 64)));
+        assert_eq!(color.true_color_rgb(), Some((255, 128, 64)));
         assert_eq!(color.index(), None);
     }
 
@@ -136,7 +159,10 @@ mod tests {
     fn test_color_index() {
         let color = Color::Index(5);
         assert_eq!(color.index(), Some(5));
-        assert_eq!(color.rgb(), None);
+        // Index colors now resolve via ACI table
+        assert_eq!(color.rgb(), Some((0, 0, 255)));
+        // But true_color_rgb returns None for index colors
+        assert_eq!(color.true_color_rgb(), None);
     }
 
     #[test]
@@ -154,6 +180,35 @@ mod tests {
     #[test]
     fn test_default_color() {
         assert_eq!(Color::default(), Color::ByLayer);
+    }
+
+    #[test]
+    fn test_from_true_color_value() {
+        let color = Color::from_true_color_value(0xFF8040);
+        assert_eq!(color, Color::Rgb { r: 255, g: 128, b: 64 });
+    }
+
+    #[test]
+    fn test_to_true_color_value() {
+        let color = Color::from_rgb(255, 128, 64);
+        assert_eq!(color.to_true_color_value(), Some(0xFF8040));
+        assert_eq!(Color::Index(1).to_true_color_value(), None);
+    }
+
+    #[test]
+    fn test_approximate_index_nearest_neighbor() {
+        // Pure red → ACI 1
+        assert_eq!(Color::from_rgb(255, 0, 0).approximate_index(), 1);
+        // Pure blue → ACI 5 (or 170, both are (0,0,255))
+        let idx = Color::from_rgb(0, 0, 255).approximate_index();
+        assert!(idx == 5 || idx == 170);
+    }
+
+    #[test]
+    fn test_is_true_color() {
+        assert!(Color::from_rgb(10, 20, 30).is_true_color());
+        assert!(!Color::Index(1).is_true_color());
+        assert!(!Color::ByLayer.is_true_color());
     }
 }
 

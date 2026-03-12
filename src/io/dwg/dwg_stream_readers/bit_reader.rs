@@ -790,20 +790,29 @@ impl DwgBitReader {
             // R2004+
             let size = self.read_bit_short();
             let mut transparency = Transparency::BY_LAYER;
-            let mut is_book_color = false;
 
             if size != 0 {
                 let flags = (size as u16) & 0xFF00;
 
-                let color = if (flags & 0x4000) > 0 {
-                    // has AcDbColor reference (0x8000 is also set)
-                    is_book_color = true;
-                    Color::ByBlock
-                } else if (flags & 0x8000) > 0 {
-                    // complex color (RGB)
+                // 0x4000: AcDbColor handle reference (handle section)
+                let is_book_color = (flags & 0x4000) > 0;
+
+                let color = if (flags & 0x8000) > 0 {
+                    // Complex/true color BL follows in main stream.
+                    // The BL uses the same packed format as CMC:
+                    //   0xC0000000 = ByLayer, flag byte bit 0 set = ACI index,
+                    //   otherwise = true RGB color.
                     let rgb = self.read_bit_long() as u32;
                     let arr = rgb.to_le_bytes();
-                    Color::from_rgb(arr[2], arr[1], arr[0])
+                    if rgb == 0xC000_0000 {
+                        Color::ByLayer
+                    } else if (rgb & 0x0100_0000) != 0 {
+                        // Indexed color (flag byte 0xC3 has bit 0 set)
+                        Color::from_index(arr[0] as i16)
+                    } else {
+                        // True color RGB (flag byte 0xC2)
+                        Color::from_rgb(arr[2], arr[1], arr[0])
+                    }
                 } else {
                     // ACI color index (lower 12 bits)
                     Color::from_index((size & 0x0FFF) as i16)

@@ -32,18 +32,19 @@ impl Transparency {
         Transparency(alpha)
     }
 
-    /// Create transparency from DWG alpha value (32-bit format)
+    /// Create transparency from a packed alpha value (32-bit format).
     ///
-    /// The first byte represents the transparency type:
-    /// - 0 = BYLAYER
-    /// - 1 = BYBLOCK  
-    /// - 3 = the transparency value in the last byte
+    /// Works for both DWG and DXF formats:
+    /// - `0` → ByLayer
+    /// - Type byte `1` → ByBlock (treated as opaque)
+    /// - Type byte `2` (DXF code 440) → explicit transparency value in low byte
+    /// - Type byte `3` (DWG ENC) → explicit transparency value in low byte
     pub fn from_alpha_value(value: u32) -> Self {
         let type_byte = (value >> 24) as u8;
         match type_byte {
             0 => Transparency::BY_LAYER,
             1 => Transparency::OPAQUE, // BYBLOCK = opaque for now
-            3 => Transparency((value & 0xFF) as u8),
+            2 | 3 => Transparency((value & 0xFF) as u8),
             _ => Transparency::OPAQUE,
         }
     }
@@ -79,19 +80,23 @@ impl Transparency {
     pub const T_80: Transparency = Transparency(204);  // 80% transparent
     pub const T_90: Transparency = Transparency(230);  // 90% transparent
     
-    /// Convert to DWG alpha value (32-bit format)
-    ///
-    /// The first byte represents the transparency type:
-    /// - 0 = BYLAYER
-    /// - 1 = BYBLOCK
-    /// - 3 = the transparency value in the last byte
+    /// Convert to DWG alpha value (32-bit format, type byte 3).
     pub fn to_alpha_value(&self) -> i32 {
         if self.0 == 0 {
-            // Fully opaque, use BYLAYER type
             0
         } else {
-            // Type 3 = explicit value
+            // Type 3 = explicit value (DWG)
             ((3u32 << 24) | self.0 as u32) as i32
+        }
+    }
+
+    /// Convert to DXF code 440 value (32-bit format, type byte 2).
+    pub fn to_dxf_value(&self) -> i32 {
+        if self.0 == 0 {
+            0
+        } else {
+            // Type 2 = explicit value (DXF)
+            ((2u32 << 24) | self.0 as u32) as i32
         }
     }
 }
