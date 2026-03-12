@@ -32,9 +32,13 @@ impl<R: Read + Seek> DxfTextReader<R> {
     /// bytes gracefully.  Uses the configured encoding for fallback, or Latin-1
     /// if none set.
     fn read_line(&mut self) -> Result<Option<String>> {
-        let mut buf = Vec::new();
+        // Reuse a temporary buffer from line_buf to avoid per-line Vec allocation.
+        // We must swap it out because read_line_raw also uses line_buf.
+        let mut buf = std::mem::take(&mut self.line_buf);
+        buf.clear();
         let bytes_read = self.reader.read_until(b'\n', &mut buf)?;
         if bytes_read == 0 {
+            self.line_buf = buf; // give it back
             return Ok(None);
         }
 
@@ -44,17 +48,23 @@ impl<R: Read + Seek> DxfTextReader<R> {
         if buf.last() == Some(&b'\n') { buf.pop(); }
         if buf.last() == Some(&b'\r') { buf.pop(); }
 
-        // Try UTF-8 first, then use configured encoding or Latin-1 fallback
+        // Try UTF-8 first (takes ownership to avoid copy), then use configured encoding or Latin-1 fallback
         let line = match String::from_utf8(buf) {
-            Ok(s) => s,
+            Ok(s) => {
+                // Reclaim the allocation for next time
+                self.line_buf = Vec::with_capacity(256);
+                s
+            }
             Err(e) => {
                 let bytes = e.into_bytes();
-                if let Some(enc) = self.encoding {
+                let result = if let Some(enc) = self.encoding {
                     let (decoded, _, _) = enc.decode(&bytes);
                     decoded.into_owned()
                 } else {
                     bytes.iter().map(|&b| b as char).collect()
-                }
+                };
+                self.line_buf = bytes; // reclaim Vec allocation
+                result
             }
         };
 
@@ -102,6 +112,10 @@ impl<R: Read + Seek> DxfTextReader<R> {
     
     /// Process special character sequences in DXF strings
     fn process_string_value(&self, value: &str) -> String {
+        // Fast path: most DXF values contain no escape sequences
+        if !value.contains('^') {
+            return value.to_string();
+        }
         value
             .replace("^J", "\n")
             .replace("^M", "\r")

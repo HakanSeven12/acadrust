@@ -40,6 +40,7 @@ pub trait DxfStreamWriter {
 /// Extension trait for convenient writing operations
 pub trait DxfStreamWriterExt: DxfStreamWriter {
     /// Write a 2D point (codes 10/20 or similar)
+    #[inline]
     fn write_point2d(&mut self, x_code: i32, point: Vector2) -> Result<()> {
         self.write_double(x_code, point.x)?;
         self.write_double(x_code + 10, point.y)?;
@@ -47,6 +48,7 @@ pub trait DxfStreamWriterExt: DxfStreamWriter {
     }
     
     /// Write a 3D point (codes 10/20/30 or similar)
+    #[inline]
     fn write_point3d(&mut self, x_code: i32, point: Vector3) -> Result<()> {
         self.write_double(x_code, point.x)?;
         self.write_double(x_code + 10, point.y)?;
@@ -55,6 +57,7 @@ pub trait DxfStreamWriterExt: DxfStreamWriter {
     }
     
     /// Write a color index
+    #[inline]
     fn write_color(&mut self, code: i32, color: Color) -> Result<()> {
         match color {
             Color::ByLayer => self.write_i16(code, 256),
@@ -69,16 +72,19 @@ pub trait DxfStreamWriterExt: DxfStreamWriter {
     }
     
     /// Write common entity header
+    #[inline]
     fn write_entity_type(&mut self, entity_type: &str) -> Result<()> {
         self.write_string(0, entity_type)
     }
     
     /// Write a subclass marker
+    #[inline]
     fn write_subclass(&mut self, marker: &str) -> Result<()> {
         self.write_string(100, marker)
     }
     
     /// Write section start
+    #[inline]
     fn write_section_start(&mut self, section_name: &str) -> Result<()> {
         self.write_string(0, "SECTION")?;
         self.write_string(2, section_name)?;
@@ -86,11 +92,13 @@ pub trait DxfStreamWriterExt: DxfStreamWriter {
     }
     
     /// Write section end
+    #[inline]
     fn write_section_end(&mut self) -> Result<()> {
         self.write_string(0, "ENDSEC")
     }
     
     /// Write end of file
+    #[inline]
     fn write_eof(&mut self) -> Result<()> {
         self.write_string(0, "EOF")
     }

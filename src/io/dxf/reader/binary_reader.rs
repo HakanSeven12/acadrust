@@ -15,13 +15,15 @@ pub struct DxfBinaryReader<R: Read + Seek> {
     /// True for pre-AC1012 format (single-byte group codes)
     /// False for AC1012+ format (two-byte group codes)
     use_single_byte_codes: bool,
+    /// Reusable buffer for reading null-terminated strings.
+    str_buf: Vec<u8>,
 }
 
 impl<R: Read + Seek> DxfBinaryReader<R> {
     /// Create a new DXF binary reader
     pub fn new(mut reader: BufReader<R>) -> Result<Self> {
-        // Verify sentinel
-        let mut sentinel = vec![0u8; BINARY_SENTINEL.len()];
+        // Verify sentinel using stack array
+        let mut sentinel = [0u8; 22]; // BINARY_SENTINEL.len() == 22
         reader.read_exact(&mut sentinel)?;
         
         if sentinel != BINARY_SENTINEL {
@@ -46,6 +48,7 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
             position: BINARY_SENTINEL.len() as u64,
             peeked_pair: None,
             use_single_byte_codes,
+            str_buf: Vec::with_capacity(256),
         })
     }
     
@@ -96,8 +99,8 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
         
         match value_type {
             GroupCodeValueType::String => {
-                // Null-terminated string
-                let mut bytes = Vec::new();
+                // Null-terminated string — reuse buffer
+                self.str_buf.clear();
                 loop {
                     let mut byte = [0u8; 1];
                     self.reader.read_exact(&mut byte)?;
@@ -106,15 +109,21 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                     if byte[0] == 0 {
                         break;
                     }
-                    bytes.push(byte[0]);
+                    self.str_buf.push(byte[0]);
                 }
                 
-                // Try UTF-8 first, then fall back to lossy conversion for Windows-1252/CP1252
-                match String::from_utf8(bytes.clone()) {
-                    Ok(s) => Ok(s),
-                    Err(_) => {
-                        // Fall back to lossy conversion (replaces invalid bytes with replacement char)
-                        Ok(String::from_utf8_lossy(&bytes).into_owned())
+                // Try UTF-8 first (zero-copy take), then fall back to lossy conversion
+                match String::from_utf8(std::mem::take(&mut self.str_buf)) {
+                    Ok(s) => {
+                        // Give the buffer back for next use
+                        self.str_buf = Vec::with_capacity(256);
+                        Ok(s)
+                    }
+                    Err(e) => {
+                        let bytes = e.into_bytes();
+                        let result = String::from_utf8_lossy(&bytes).into_owned();
+                        self.str_buf = bytes; // reclaim allocation
+                        Ok(result)
                     }
                 }
             }
@@ -126,7 +135,9 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                 self.position += 8;
                 
                 let value = f64::from_le_bytes(bytes);
-                Ok(value.to_string())
+                // Use ryu for zero-allocation float-to-string
+                let mut buf = ryu::Buffer::new();
+                Ok(buf.format(value).to_owned())
             }
             
             GroupCodeValueType::Int16 | GroupCodeValueType::Byte => {
@@ -136,7 +147,8 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                 self.position += 2;
                 
                 let value = i16::from_le_bytes(bytes);
-                Ok(value.to_string())
+                let mut buf = itoa::Buffer::new();
+                Ok(buf.format(value).to_owned())
             }
             
             GroupCodeValueType::Int32 => {
@@ -146,7 +158,8 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                 self.position += 4;
                 
                 let value = i32::from_le_bytes(bytes);
-                Ok(value.to_string())
+                let mut buf = itoa::Buffer::new();
+                Ok(buf.format(value).to_owned())
             }
             
             GroupCodeValueType::Int64 => {
@@ -156,7 +169,8 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                 self.position += 8;
                 
                 let value = i64::from_le_bytes(bytes);
-                Ok(value.to_string())
+                let mut buf = itoa::Buffer::new();
+                Ok(buf.format(value).to_owned())
             }
             
             GroupCodeValueType::Bool => {
@@ -165,7 +179,7 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                 self.reader.read_exact(&mut byte)?;
                 self.position += 1;
                 
-                Ok(if byte[0] != 0 { "1" } else { "0" }.to_string())
+                Ok((if byte[0] != 0 { "1" } else { "0" }).to_owned())
             }
             
             GroupCodeValueType::BinaryData => {
@@ -181,14 +195,19 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                     self.position += length as u64;
                 }
                 
-                // Convert raw bytes to uppercase hex string (matches text DXF representation)
-                let hex: String = data.iter().map(|b| format!("{:02X}", b)).collect();
+                // Convert raw bytes to uppercase hex string using lookup table
+                const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+                let mut hex = String::with_capacity(length * 2);
+                for &b in &data {
+                    hex.push(HEX_CHARS[(b >> 4) as usize] as char);
+                    hex.push(HEX_CHARS[(b & 0x0F) as usize] as char);
+                }
                 Ok(hex)
             }
 
-            GroupCodeValueType::Handle => {
-                // Null-terminated hex string
-                let mut bytes = Vec::new();
+            GroupCodeValueType::Handle | _ => {
+                // Null-terminated string — reuse buffer
+                self.str_buf.clear();
                 loop {
                     let mut byte = [0u8; 1];
                     self.reader.read_exact(&mut byte)?;
@@ -197,27 +216,22 @@ impl<R: Read + Seek> DxfBinaryReader<R> {
                     if byte[0] == 0 {
                         break;
                     }
-                    bytes.push(byte[0]);
+                    self.str_buf.push(byte[0]);
                 }
                 
-                Ok(String::from_utf8_lossy(&bytes).into_owned())
-            }
-            
-            _ => {
-                // Default to string - use lossy for Windows-1252 compatibility
-                let mut bytes = Vec::new();
-                loop {
-                    let mut byte = [0u8; 1];
-                    self.reader.read_exact(&mut byte)?;
-                    self.position += 1;
-                    
-                    if byte[0] == 0 {
-                        break;
+                // Handle values are ASCII hex digits, always valid UTF-8
+                match String::from_utf8(std::mem::take(&mut self.str_buf)) {
+                    Ok(s) => {
+                        self.str_buf = Vec::with_capacity(256);
+                        Ok(s)
                     }
-                    bytes.push(byte[0]);
+                    Err(e) => {
+                        let bytes = e.into_bytes();
+                        let result = String::from_utf8_lossy(&bytes).into_owned();
+                        self.str_buf = bytes;
+                        Ok(result)
+                    }
                 }
-                
-                Ok(String::from_utf8_lossy(&bytes).into_owned())
             }
         }
     }
@@ -258,8 +272,8 @@ impl<R: Read + Seek> DxfStreamReader for DxfBinaryReader<R> {
         self.position = 0;
         self.peeked_pair = None;
         
-        // Re-verify sentinel
-        let mut sentinel = vec![0u8; BINARY_SENTINEL.len()];
+        // Re-verify sentinel using stack array
+        let mut sentinel = [0u8; 22];
         self.reader.read_exact(&mut sentinel)?;
         
         if sentinel != BINARY_SENTINEL {

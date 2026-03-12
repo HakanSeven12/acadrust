@@ -12,6 +12,8 @@ const BINARY_DXF_SENTINEL: &[u8] = b"AutoCAD Binary DXF\r\n\x1a\x00";
 /// Binary DXF stream writer
 pub struct DxfBinaryWriter<W: Write> {
     writer: W,
+    /// Stack buffer for formatting handles without heap allocation.
+    hex_buf: [u8; 17],
 }
 
 impl<W: Write> DxfBinaryWriter<W> {
@@ -19,7 +21,7 @@ impl<W: Write> DxfBinaryWriter<W> {
     pub fn new(mut writer: W) -> Result<Self> {
         // Write the binary sentinel at the start
         writer.write_all(BINARY_DXF_SENTINEL)?;
-        Ok(Self { writer })
+        Ok(Self { writer, hex_buf: [0u8; 17] })
     }
     
     /// Write a DXF code as 16-bit little-endian
@@ -88,8 +90,24 @@ impl<W: Write> DxfStreamWriter for DxfBinaryWriter<W> {
     fn write_handle(&mut self, code: i32, handle: Handle) -> Result<()> {
         self.write_code(code)?;
         // Handles are written as hex strings even in binary DXF
-        let hex_str = format!("{:X}", handle.value());
-        self.write_null_string(&hex_str)?;
+        // Format directly into stack buffer to avoid heap allocation
+        let val = handle.value();
+        if val == 0 {
+            self.writer.write_all(b"0\0")?;
+        } else {
+            let mut pos = 16usize;
+            let mut v = val;
+            while v > 0 {
+                pos -= 1;
+                let digit = (v & 0xF) as u8;
+                self.hex_buf[pos] = if digit < 10 { b'0' + digit } else { b'A' + digit - 10 };
+                v >>= 4;
+            }
+            let hex_len = 16 - pos;
+            self.hex_buf.copy_within(pos..16, 0);
+            self.hex_buf[hex_len] = 0; // null terminator
+            self.writer.write_all(&self.hex_buf[..hex_len + 1])?;
+        }
         Ok(())
     }
     
