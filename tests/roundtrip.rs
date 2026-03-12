@@ -14,7 +14,8 @@ use std::io::Cursor;
 use acadrust::entities::*;
 use acadrust::entities::dimension::DimensionLinear;
 use acadrust::entities::hatch::{
-    BoundaryEdge, BoundaryPath, PolylineEdge,
+    BoundaryEdge, BoundaryPath, BoundaryPathFlags, CircularArcEdge, EllipticArcEdge,
+    LineEdge, PolylineEdge, SplineEdge,
 };
 use acadrust::entities::mesh::Mesh;
 use acadrust::entities::mline::MLine;
@@ -878,9 +879,8 @@ fn dxf_roundtrip_deep_r2018() {
     // Known DXF roundtrip issues:
     //   - Entity type distribution mismatch from Polyline type collapse (1 diff)
     //   - Polyline2D/3D/PolyfaceMesh read back as legacy Polyline (3 missing + 1 appeared = 4 diffs)
-    //   - Hatch boundary paths not preserved in DXF write/read (1 diff)
     //   - MultiLeader leader_roots not preserved in DXF (1 diff)
-    let max_known = 7;
+    let max_known = 6;
     if !report.is_empty() {
         eprintln!(
             "DXF R2018 roundtrip: {} known issue(s):\n{}",
@@ -902,7 +902,7 @@ fn dxf_roundtrip_deep_r2000() {
     let (doc, _) = build_rich_document(DxfVersion::AC1015);
     let rt = dxf_roundtrip(doc.clone());
     let report = compare_documents(&doc, &rt);
-    let max_known = 7; // same known issues as R2018
+    let max_known = 6; // same known issues as R2018
     if !report.is_empty() {
         eprintln!(
             "DXF R2000 roundtrip: {} known issue(s):\n{}",
@@ -1920,5 +1920,184 @@ fn dwg_version_matrix_spline() {
             "DWG {} Spline: entity count changed",
             label
         );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  HATCH EDGE ROUNDTRIP TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Helper: create a doc with a single hatch containing one boundary path with given edges.
+fn build_hatch_doc(edges: Vec<BoundaryEdge>, flags: BoundaryPathFlags) -> CadDocument {
+    let mut doc = CadDocument::with_version(DxfVersion::AC1032);
+    let mut hatch = Hatch::solid();
+    let mut path = BoundaryPath::with_flags(flags);
+    for e in edges {
+        path.edges.push(e);
+    }
+    hatch.add_path(path);
+    doc.add_entity(EntityType::Hatch(hatch)).unwrap();
+    doc
+}
+
+/// Helper: extract first hatch's first boundary path from a document.
+fn extract_hatch_path(doc: &CadDocument) -> &BoundaryPath {
+    for entity in doc.entities() {
+        if let EntityType::Hatch(h) = entity {
+            return &h.paths[0];
+        }
+    }
+    panic!("No hatch found in document");
+}
+
+#[test]
+fn hatch_line_edge_roundtrip() {
+    let edge = BoundaryEdge::Line(LineEdge {
+        start: Vector2::new(1.0, 2.0),
+        end: Vector2::new(3.0, 4.0),
+    });
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    let doc = build_hatch_doc(
+        vec![
+            edge.clone(),
+            BoundaryEdge::Line(LineEdge {
+                start: Vector2::new(3.0, 4.0),
+                end: Vector2::new(1.0, 2.0),
+            }),
+        ],
+        flags,
+    );
+    let rt = dxf_roundtrip(doc);
+    let path = extract_hatch_path(&rt);
+    assert!(path.flags.is_external(), "external flag lost");
+    assert_eq!(path.edges.len(), 2, "edge count");
+    if let BoundaryEdge::Line(e) = &path.edges[0] {
+        assert!((e.start.x - 1.0).abs() < 1e-6);
+        assert!((e.start.y - 2.0).abs() < 1e-6);
+        assert!((e.end.x - 3.0).abs() < 1e-6);
+        assert!((e.end.y - 4.0).abs() < 1e-6);
+    } else {
+        panic!("Expected Line edge");
+    }
+}
+
+#[test]
+fn hatch_circular_arc_edge_roundtrip() {
+    let edge = BoundaryEdge::CircularArc(CircularArcEdge {
+        center: Vector2::new(5.0, 5.0),
+        radius: 10.0,
+        start_angle: 0.0,
+        end_angle: std::f64::consts::FRAC_PI_2,
+        counter_clockwise: true,
+    });
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    let doc = build_hatch_doc(vec![edge], flags);
+    let rt = dxf_roundtrip(doc);
+    let path = extract_hatch_path(&rt);
+    assert_eq!(path.edges.len(), 1);
+    if let BoundaryEdge::CircularArc(a) = &path.edges[0] {
+        assert!((a.center.x - 5.0).abs() < 1e-6);
+        assert!((a.center.y - 5.0).abs() < 1e-6);
+        assert!((a.radius - 10.0).abs() < 1e-6);
+        assert!((a.start_angle - 0.0).abs() < 1e-4);
+        assert!((a.end_angle - std::f64::consts::FRAC_PI_2).abs() < 1e-4);
+        assert!(a.counter_clockwise);
+    } else {
+        panic!("Expected CircularArc edge");
+    }
+}
+
+#[test]
+fn hatch_elliptic_arc_edge_roundtrip() {
+    let edge = BoundaryEdge::EllipticArc(EllipticArcEdge {
+        center: Vector2::new(10.0, 20.0),
+        major_axis_endpoint: Vector2::new(15.0, 0.0),
+        minor_axis_ratio: 0.5,
+        start_angle: 0.0,
+        end_angle: std::f64::consts::PI,
+        counter_clockwise: true,
+    });
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    let doc = build_hatch_doc(vec![edge], flags);
+    let rt = dxf_roundtrip(doc);
+    let path = extract_hatch_path(&rt);
+    assert_eq!(path.edges.len(), 1);
+    if let BoundaryEdge::EllipticArc(e) = &path.edges[0] {
+        assert!((e.center.x - 10.0).abs() < 1e-6);
+        assert!((e.center.y - 20.0).abs() < 1e-6);
+        assert!((e.major_axis_endpoint.x - 15.0).abs() < 1e-6);
+        assert!((e.minor_axis_ratio - 0.5).abs() < 1e-6);
+        assert!((e.start_angle - 0.0).abs() < 1e-4);
+        assert!((e.end_angle - std::f64::consts::PI).abs() < 1e-4);
+        assert!(e.counter_clockwise);
+    } else {
+        panic!("Expected EllipticArc edge");
+    }
+}
+
+#[test]
+fn hatch_spline_edge_roundtrip() {
+    let edge = BoundaryEdge::Spline(SplineEdge {
+        degree: 3,
+        rational: false,
+        periodic: false,
+        knots: vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        control_points: vec![
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::new(5.0, 10.0, 1.0),
+            Vector3::new(10.0, 10.0, 1.0),
+            Vector3::new(15.0, 0.0, 1.0),
+        ],
+        fit_points: Vec::new(),
+        start_tangent: Vector2::new(0.0, 0.0),
+        end_tangent: Vector2::new(0.0, 0.0),
+    });
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    let doc = build_hatch_doc(vec![edge], flags);
+    let rt = dxf_roundtrip(doc);
+    let path = extract_hatch_path(&rt);
+    assert_eq!(path.edges.len(), 1);
+    if let BoundaryEdge::Spline(s) = &path.edges[0] {
+        assert_eq!(s.degree, 3);
+        assert_eq!(s.knots.len(), 8);
+        assert_eq!(s.control_points.len(), 4);
+        assert!((s.control_points[1].x - 5.0).abs() < 1e-6);
+        assert!((s.control_points[1].y - 10.0).abs() < 1e-6);
+    } else {
+        panic!("Expected Spline edge");
+    }
+}
+
+#[test]
+fn hatch_polyline_edge_roundtrip() {
+    let edge = BoundaryEdge::Polyline(PolylineEdge::new(
+        vec![
+            Vector2::new(0.0, 0.0),
+            Vector2::new(100.0, 0.0),
+            Vector2::new(100.0, 100.0),
+            Vector2::new(0.0, 100.0),
+        ],
+        true,
+    ));
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    flags.set_polyline(true);
+    let doc = build_hatch_doc(vec![edge], flags);
+    let rt = dxf_roundtrip(doc);
+    let path = extract_hatch_path(&rt);
+    assert!(path.flags.is_polyline(), "polyline flag lost");
+    assert_eq!(path.edges.len(), 1);
+    if let BoundaryEdge::Polyline(p) = &path.edges[0] {
+        assert_eq!(p.vertices.len(), 4);
+        assert!(p.is_closed);
+        assert!((p.vertices[0].x - 0.0).abs() < 1e-6);
+        assert!((p.vertices[1].x - 100.0).abs() < 1e-6);
+        assert!((p.vertices[2].y - 100.0).abs() < 1e-6);
+    } else {
+        panic!("Expected Polyline edge");
     }
 }
