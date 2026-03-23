@@ -247,6 +247,12 @@ impl Entity for Face3D {
         self.third_corner = transform.apply(self.third_corner);
         self.fourth_corner = transform.apply(self.fourth_corner);
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror reverses winding order — swap second and fourth corners
+        std::mem::swap(&mut self.second_corner, &mut self.fourth_corner);
+    }
 }
 
 

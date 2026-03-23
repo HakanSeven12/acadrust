@@ -158,6 +158,19 @@ impl Entity for Ellipse {
         // Note: minor_axis_ratio stays the same for uniform scaling
         // For non-uniform scaling, the ellipse might need to be recalculated
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        
+        // Mirror reverses the parametric direction of the ellipse.
+        // For a full ellipse (0..2π) no parameter change is needed.
+        if !self.is_full() {
+            let new_start = -self.end_parameter;
+            let new_end = -self.start_parameter;
+            self.start_parameter = new_start;
+            self.end_parameter = new_end;
+        }
+    }
 }
 
 #[cfg(test)]

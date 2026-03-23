@@ -206,6 +206,27 @@ impl Entity for Arc {
         // Note: start_angle and end_angle remain the same for rotation around normal
         // For general 3D transforms, angle recalculation would be needed
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        // Save original endpoints before transforming
+        let start_pt = self.start_point();
+        let end_pt = self.end_point();
+        
+        // Apply the geometric transform (center, radius, normal)
+        self.apply_transform(transform);
+        
+        // Mirror the original endpoints and recalculate angles
+        // Mirror reverses arc direction → swap start/end
+        let mirrored_start = transform.apply(end_pt);
+        let mirrored_end = transform.apply(start_pt);
+        
+        self.start_angle = crate::types::normalize_angle(
+            (mirrored_start.y - self.center.y).atan2(mirrored_start.x - self.center.x),
+        );
+        self.end_angle = crate::types::normalize_angle(
+            (mirrored_end.y - self.center.y).atan2(mirrored_end.x - self.center.x),
+        );
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +271,51 @@ mod tests {
         arc.translate(Vector3::new(10.0, 20.0, 30.0));
         assert_eq!(arc.center, Vector3::new(10.0, 20.0, 30.0));
         assert_eq!(arc.radius, 5.0);
+    }
+    
+    #[test]
+    fn test_arc_mirror_x() {
+        use std::f64::consts::PI;
+        // Arc from 0° to 90° at origin, radius 5
+        let mut arc = Arc::from_coords(0.0, 0.0, 0.0, 5.0, 0.0, PI / 2.0);
+        
+        // Save original endpoints
+        let orig_start = arc.start_point();
+        let orig_end = arc.end_point();
+        
+        arc.mirror_x();
+        
+        // Center should be mirrored (x negated)
+        assert!((arc.center.x - 0.0).abs() < 1e-10);
+        
+        // New endpoints should match mirrored original endpoints (swapped)
+        let new_start = arc.start_point();
+        let new_end = arc.end_point();
+        // Mirrored original end → new start
+        assert!((new_start.x - (-orig_end.x)).abs() < 1e-8);
+        assert!((new_start.y - orig_end.y).abs() < 1e-8);
+        // Mirrored original start → new end
+        assert!((new_end.x - (-orig_start.x)).abs() < 1e-8);
+        assert!((new_end.y - orig_start.y).abs() < 1e-8);
+    }
+    
+    #[test]
+    fn test_arc_mirror_y() {
+        use std::f64::consts::PI;
+        let mut arc = Arc::from_coords(0.0, 0.0, 0.0, 5.0, 0.0, PI / 2.0);
+        let orig_start = arc.start_point();
+        let orig_end = arc.end_point();
+        
+        arc.mirror_y();
+        
+        let new_start = arc.start_point();
+        let new_end = arc.end_point();
+        // Mirrored original end → new start
+        assert!((new_start.x - orig_end.x).abs() < 1e-8);
+        assert!((new_start.y - (-orig_end.y)).abs() < 1e-8);
+        // Mirrored original start → new end
+        assert!((new_end.x - orig_start.x).abs() < 1e-8);
+        assert!((new_end.y - (-orig_start.y)).abs() < 1e-8);
     }
 }
 

@@ -478,6 +478,57 @@ impl Transform {
         }
     }
 
+    /// Create a mirror transform across the YZ plane (negate X)
+    pub fn from_mirror_x() -> Self {
+        Self {
+            matrix: Matrix4::scaling(-1.0, 1.0, 1.0),
+        }
+    }
+
+    /// Create a mirror transform across the XZ plane (negate Y)
+    pub fn from_mirror_y() -> Self {
+        Self {
+            matrix: Matrix4::scaling(1.0, -1.0, 1.0),
+        }
+    }
+
+    /// Create a mirror transform across the XY plane (negate Z)
+    pub fn from_mirror_z() -> Self {
+        Self {
+            matrix: Matrix4::scaling(1.0, 1.0, -1.0),
+        }
+    }
+
+    /// Create a mirror transform across an arbitrary plane defined by a point and normal
+    ///
+    /// The plane passes through `point` with the given `normal` direction.
+    /// Uses the Householder reflection: P' = P - 2(n·P + d)n
+    pub fn from_mirror_plane(point: Vector3, normal: Vector3) -> Self {
+        let n = normal.normalize();
+        let d = -(n.x * point.x + n.y * point.y + n.z * point.z);
+
+        Self {
+            matrix: Matrix4 {
+                m: [
+                    [1.0 - 2.0 * n.x * n.x, -2.0 * n.x * n.y,       -2.0 * n.x * n.z,       -2.0 * n.x * d],
+                    [-2.0 * n.y * n.x,       1.0 - 2.0 * n.y * n.y,  -2.0 * n.y * n.z,        -2.0 * n.y * d],
+                    [-2.0 * n.z * n.x,       -2.0 * n.z * n.y,       1.0 - 2.0 * n.z * n.z,   -2.0 * n.z * d],
+                    [0.0,                    0.0,                     0.0,                      1.0],
+                ],
+            },
+        }
+    }
+
+    /// Create a mirror transform across a line defined by two points (in the XY plane)
+    ///
+    /// The mirror line passes through `p1` and `p2`.
+    pub fn from_mirror_line(p1: Vector3, p2: Vector3) -> Self {
+        let dir = (p2 - p1).normalize();
+        // Normal to the line in the XY plane
+        let normal = Vector3::new(-dir.y, dir.x, 0.0);
+        Self::from_mirror_plane(p1, normal)
+    }
+
     /// Check if transform is identity
     pub fn is_identity(&self) -> bool {
         *self == Self::identity()
@@ -513,6 +564,16 @@ pub fn rotate_point_2d(point: Vector2, center: Vector2, angle: f64) -> Vector2 {
 /// Helper to check if angle is effectively zero
 pub fn is_zero_angle(angle: f64) -> bool {
     angle.abs() < 1e-10
+}
+
+/// Normalize an angle to the range [0, 2π)
+pub fn normalize_angle(angle: f64) -> f64 {
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let mut a = angle % two_pi;
+    if a < 0.0 {
+        a += two_pi;
+    }
+    a
 }
 
 #[cfg(test)]
@@ -577,6 +638,107 @@ mod tests {
         let m = Matrix3::arbitrary_axis(Vector3::new(0.0, 0.0, 1.0));
         let det = m.determinant();
         assert!((det - 1.0).abs() < 1e-10); // Should be orthonormal
+    }
+    
+    #[test]
+    fn test_mirror_x() {
+        let t = Transform::from_mirror_x();
+        let p = Vector3::new(3.0, 5.0, 7.0);
+        let r = t.apply(p);
+        assert!((r.x - (-3.0)).abs() < 1e-10);
+        assert!((r.y - 5.0).abs() < 1e-10);
+        assert!((r.z - 7.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_y() {
+        let t = Transform::from_mirror_y();
+        let p = Vector3::new(3.0, 5.0, 7.0);
+        let r = t.apply(p);
+        assert!((r.x - 3.0).abs() < 1e-10);
+        assert!((r.y - (-5.0)).abs() < 1e-10);
+        assert!((r.z - 7.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_z() {
+        let t = Transform::from_mirror_z();
+        let p = Vector3::new(3.0, 5.0, 7.0);
+        let r = t.apply(p);
+        assert!((r.x - 3.0).abs() < 1e-10);
+        assert!((r.y - 5.0).abs() < 1e-10);
+        assert!((r.z - (-7.0)).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_plane_through_origin() {
+        // Mirror across YZ plane through origin = same as mirror_x
+        let t = Transform::from_mirror_plane(Vector3::ZERO, Vector3::UNIT_X);
+        let p = Vector3::new(3.0, 5.0, 7.0);
+        let r = t.apply(p);
+        assert!((r.x - (-3.0)).abs() < 1e-10);
+        assert!((r.y - 5.0).abs() < 1e-10);
+        assert!((r.z - 7.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_plane_offset() {
+        // Mirror across plane x=2 (normal X, point (2,0,0))
+        let t = Transform::from_mirror_plane(Vector3::new(2.0, 0.0, 0.0), Vector3::UNIT_X);
+        let p = Vector3::new(5.0, 3.0, 1.0);
+        let r = t.apply(p);
+        assert!((r.x - (-1.0)).abs() < 1e-10); // 2 - (5-2) = -1
+        assert!((r.y - 3.0).abs() < 1e-10);
+        assert!((r.z - 1.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_line() {
+        // Mirror across the X axis (line from (0,0,0) to (1,0,0))
+        let t = Transform::from_mirror_line(
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+        );
+        let p = Vector3::new(3.0, 5.0, 0.0);
+        let r = t.apply(p);
+        assert!((r.x - 3.0).abs() < 1e-10);
+        assert!((r.y - (-5.0)).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_line_diagonal() {
+        // Mirror across the line y=x (45-degree line through origin)
+        let t = Transform::from_mirror_line(
+            Vector3::ZERO,
+            Vector3::new(1.0, 1.0, 0.0),
+        );
+        let p = Vector3::new(3.0, 0.0, 0.0);
+        let r = t.apply(p);
+        // Point (3,0) mirrored across y=x should give (0,3)
+        assert!((r.x - 0.0).abs() < 1e-10);
+        assert!((r.y - 3.0).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_mirror_is_involution() {
+        // Applying a mirror twice should return the original point
+        let t = Transform::from_mirror_plane(
+            Vector3::new(1.0, 2.0, 3.0),
+            Vector3::new(1.0, 1.0, 0.0),
+        );
+        let p = Vector3::new(7.0, -2.0, 4.0);
+        let r = t.apply(t.apply(p));
+        assert!((r.x - p.x).abs() < 1e-10);
+        assert!((r.y - p.y).abs() < 1e-10);
+        assert!((r.z - p.z).abs() < 1e-10);
+    }
+    
+    #[test]
+    fn test_normalize_angle() {
+        assert!((normalize_angle(0.0)).abs() < 1e-10);
+        assert!((normalize_angle(PI) - PI).abs() < 1e-10);
+        assert!((normalize_angle(-PI / 2.0) - 3.0 * PI / 2.0).abs() < 1e-10);
+        assert!((normalize_angle(3.0 * PI) - PI).abs() < 1e-10);
     }
 }
 

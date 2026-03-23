@@ -720,6 +720,14 @@ impl Entity for Mesh {
             *vertex = transform.apply(*vertex);
         }
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror reverses face winding order — flip normals to maintain correct orientation
+        for face in &mut self.faces {
+            face.reverse();
+        }
+    }
 }
 
 // ============================================================================

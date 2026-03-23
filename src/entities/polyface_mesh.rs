@@ -794,6 +794,14 @@ impl Entity for PolyfaceMesh {
         // Transform normal
         self.normal = transform.apply_rotation(self.normal).normalize();
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror reverses face winding order
+        for face in &mut self.faces {
+            face.reverse();
+        }
+    }
 }
 
 // ============================================================================

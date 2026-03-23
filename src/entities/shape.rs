@@ -398,6 +398,18 @@ impl Entity for Shape {
         // Transform normal
         self.normal = transform.apply_rotation(self.normal).normalize();
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror the rotation by reflecting the direction vector
+        let dir = Vector3::new(self.rotation.cos(), self.rotation.sin(), 0.0);
+        let mirrored_dir = transform.apply_rotation(dir);
+        self.rotation = mirrored_dir.y.atan2(mirrored_dir.x);
+        // Negate the relative X scale to flip the shape horizontally
+        self.relative_x_scale = -self.relative_x_scale;
+        // Mirror flips the oblique angle direction
+        self.oblique_angle = -self.oblique_angle;
+    }
 }
 
 // ============================================================================

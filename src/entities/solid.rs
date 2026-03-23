@@ -176,5 +176,11 @@ impl Entity for Solid {
         // Transform the normal vector
         self.normal = transform.apply_rotation(self.normal).normalize();
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror reverses winding order — swap second and fourth corners
+        std::mem::swap(&mut self.second_corner, &mut self.fourth_corner);
+    }
 }
 

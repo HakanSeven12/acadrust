@@ -397,6 +397,14 @@ impl Entity for Polyline2D {
         // Transform the normal vector
         self.normal = transform.apply_rotation(self.normal).normalize();
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror reverses arc direction — negate all vertex bulge values
+        for vertex in &mut self.vertices {
+            vertex.bulge = -vertex.bulge;
+        }
+    }
 }
 
 impl Entity for Polyline {

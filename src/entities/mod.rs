@@ -202,6 +202,39 @@ pub trait Entity {
     fn apply_scaling_with_origin(&mut self, scale: Vector3, origin: Vector3) {
         self.apply_transform(&Transform::from_scaling_with_origin(scale, origin));
     }
+    
+    /// Apply a mirror transform with entity-specific corrections
+    ///
+    /// Override this for entities that need post-processing after mirroring
+    /// (e.g., arc angle swaps, bulge negation, face winding reversal).
+    fn apply_mirror(&mut self, transform: &Transform) {
+        self.apply_transform(transform);
+    }
+    
+    /// Mirror the entity across the YZ plane (negate X coordinates)
+    fn mirror_x(&mut self) {
+        self.apply_mirror(&Transform::from_mirror_x());
+    }
+    
+    /// Mirror the entity across the XZ plane (negate Y coordinates)
+    fn mirror_y(&mut self) {
+        self.apply_mirror(&Transform::from_mirror_y());
+    }
+    
+    /// Mirror the entity across the XY plane (negate Z coordinates)
+    fn mirror_z(&mut self) {
+        self.apply_mirror(&Transform::from_mirror_z());
+    }
+    
+    /// Mirror the entity across a line defined by two points (in the XY plane)
+    fn mirror_about_line(&mut self, p1: Vector3, p2: Vector3) {
+        self.apply_mirror(&Transform::from_mirror_line(p1, p2));
+    }
+    
+    /// Mirror the entity across an arbitrary plane
+    fn mirror_about_plane(&mut self, point: Vector3, normal: Vector3) {
+        self.apply_mirror(&Transform::from_mirror_plane(point, normal));
+    }
 }
 
 /// Common entity data shared by all entities

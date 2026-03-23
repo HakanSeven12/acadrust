@@ -759,9 +759,59 @@ impl Entity for Hatch {
         let elev_pt = transform.apply(Vector3::new(0.0, 0.0, self.elevation));
         self.elevation = elev_pt.z;
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        use crate::types::normalize_angle;
+        
+        self.apply_transform(transform);
+        
+        // Mirror-specific corrections for boundary edges
+        for path in &mut self.paths {
+            for edge in &mut path.edges {
+                match edge {
+                    BoundaryEdge::CircularArc(arc) => {
+                        // Recalculate mirrored angles and flip direction
+                        let old_start = arc.start_angle;
+                        let old_end = arc.end_angle;
+                        
+                        // Mirror the angle endpoints using the transform
+                        let center_3d = Vector3::new(arc.center.x, arc.center.y, 0.0);
+                        let start_pt = Vector3::new(
+                            arc.center.x + arc.radius * old_start.cos(),
+                            arc.center.y + arc.radius * old_start.sin(),
+                            0.0,
+                        );
+                        let end_pt = Vector3::new(
+                            arc.center.x + arc.radius * old_end.cos(),
+                            arc.center.y + arc.radius * old_end.sin(),
+                            0.0,
+                        );
+                        let ms = transform.apply(start_pt);
+                        let me = transform.apply(end_pt);
+                        
+                        // Swap start/end and recalculate (mirror reverses direction)
+                        arc.start_angle = normalize_angle((me.y - center_3d.y).atan2(me.x - center_3d.x));
+                        arc.end_angle = normalize_angle((ms.y - center_3d.y).atan2(ms.x - center_3d.x));
+                        arc.counter_clockwise = !arc.counter_clockwise;
+                    }
+                    BoundaryEdge::EllipticArc(ellipse) => {
+                        // Mirror reverses parametric direction
+                        let new_start = -ellipse.end_angle;
+                        let new_end = -ellipse.start_angle;
+                        ellipse.start_angle = new_start;
+                        ellipse.end_angle = new_end;
+                        ellipse.counter_clockwise = !ellipse.counter_clockwise;
+                    }
+                    BoundaryEdge::Polyline(poly) => {
+                        // Negate bulge values (stored in z component)
+                        for v in &mut poly.vertices {
+                            v.z = -v.z;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
-
-
-
-
 

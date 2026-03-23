@@ -203,6 +203,17 @@ impl Entity for Text {
         // Transform the normal vector
         self.normal = transform.apply_rotation(self.normal).normalize();
     }
+    
+    fn apply_mirror(&mut self, transform: &crate::types::Transform) {
+        self.apply_transform(transform);
+        // Mirror the rotation angle: reflect the text direction vector and
+        // recalculate the angle from the mirrored direction.
+        let dir = Vector3::new(self.rotation.cos(), self.rotation.sin(), 0.0);
+        let mirrored_dir = transform.apply_rotation(dir);
+        self.rotation = mirrored_dir.y.atan2(mirrored_dir.x);
+        // Mirror flips the oblique angle direction
+        self.oblique_angle = -self.oblique_angle;
+    }
 }
 
 
