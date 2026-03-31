@@ -20,6 +20,7 @@ pub mod common;
 pub mod entities;
 pub mod objects;
 
+use std::collections::HashSet;
 use std::collections::VecDeque;
 
 use crate::document::CadDocument;
@@ -93,6 +94,8 @@ pub struct DwgObjectWriter<'a> {
     /// SAB data entries collected during entity writing (AC1027+).
     /// Each entry is (entity_handle, sab_binary_data).
     pub(super) sab_entries: Vec<(Handle, Vec<u8>)>,
+    /// Tracks which object handles have already been written to prevent duplicates.
+    pub(super) visited_objects: HashSet<Handle>,
 }
 
 impl<'a> DwgObjectWriter<'a> {
@@ -116,6 +119,7 @@ impl<'a> DwgObjectWriter<'a> {
             next_alloc_handle: document.header.handle_seed,
             model_space_extents: None,
             sab_entries: Vec::new(),
+            visited_objects: HashSet::new(),
         })
     }
 
@@ -1278,8 +1282,8 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit_short(ds.dimalttz);
             // DIMUPT B 288
             self.writer.write_bit(ds.dimupt);
-            // DIMFIT BS 287 (hardcoded to 3 per C#)
-            self.writer.write_bit_short(3);
+            // DIMFIT BS 287
+            self.writer.write_bit_short(ds.dimfit);
         }
 
         // R2007+
@@ -1609,10 +1613,53 @@ impl<'a> DwgObjectWriter<'a> {
 
     /// Drain the object queue, writing each non-graphical object.
     fn write_objects(&mut self) {
+        // Phase 1: drain the queue (root dict entries + xdict handles)
         while let Some(handle) = self.object_queue.pop_front() {
+            if self.visited_objects.contains(&handle) {
+                continue;
+            }
             if let Some(obj) = self.document.objects.get(&handle) {
+                self.visited_objects.insert(handle);
                 let obj = obj.clone();
                 self.write_object(&obj);
+            }
+        }
+
+        // Phase 2: write any remaining objects not yet visited.
+        // Extension dictionaries on table entries (layers, block records,
+        // etc.) may not be reachable from the root dictionary chain because
+        // the table entry structs don't store xdictionary handles.  This
+        // loop catches all orphaned dictionaries, XRecords, etc.
+        //
+        // First, seed visited_objects with ALL handles already written
+        // (table controls, table entries, block entities, Phase 1 objects)
+        // to prevent Phase 2 from creating duplicate handle→offset entries
+        // that would corrupt the Object Map.
+        for &(handle_val, _) in &self.handle_map {
+            self.visited_objects.insert(Handle::from(handle_val));
+        }
+
+        let remaining: Vec<(Handle, crate::objects::ObjectType)> = self
+            .document
+            .objects
+            .iter()
+            .filter(|(h, _)| !self.visited_objects.contains(h))
+            .map(|(h, o)| (*h, o.clone()))
+            .collect();
+
+        for (handle, obj) in remaining {
+            self.visited_objects.insert(handle);
+            self.write_object(&obj);
+            // Drain any newly enqueued objects (children of orphan dicts)
+            while let Some(child) = self.object_queue.pop_front() {
+                if self.visited_objects.contains(&child) {
+                    continue;
+                }
+                if let Some(child_obj) = self.document.objects.get(&child) {
+                    self.visited_objects.insert(child);
+                    let child_obj = child_obj.clone();
+                    self.write_object(&child_obj);
+                }
             }
         }
     }

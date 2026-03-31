@@ -327,6 +327,13 @@ impl<'a> DwgObjectWriter<'a> {
                 .write_handle(DwgReferenceType::HardOwnership, xdic_val);
         }
 
+        // Enqueue extension dictionary so its object is written later
+        if let Some(xdic) = xdictionary_handle {
+            if !xdic.is_null() {
+                self.object_queue.push_back(*xdic);
+            }
+        }
+
         // R2013+: binary-data-present flag (MAIN)
         if self.version.r2013_plus(self.dxf_version) {
             self.writer.write_bit(false);
@@ -517,6 +524,13 @@ impl<'a> DwgObjectWriter<'a> {
                 .unwrap_or(0);
             self.writer
                 .write_handle(DwgReferenceType::HardOwnership, xdic_val);
+        }
+
+        // Enqueue extension dictionary so its object is written later
+        if let Some(xdic) = xdictionary_handle {
+            if !xdic.is_null() {
+                self.object_queue.push_back(*xdic);
+            }
         }
 
         // R2013+: binary-data flag

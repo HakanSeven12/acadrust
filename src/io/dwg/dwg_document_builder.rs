@@ -492,6 +492,7 @@ impl DwgDocumentBuilder {
                     ds.dimse2 = data.dimse2;
                     ds.dimtad = data.dimtad;
                     ds.dimzin = data.dimzin;
+                    ds.dimazin = data.dimazin;
                     ds.dimtxt = data.dimtxt;
                     ds.dimcen = data.dimcen;
                     ds.dimtsz = data.dimtsz;
@@ -533,12 +534,43 @@ impl DwgDocumentBuilder {
                     ds.dimjust = data.dimjust;
                     ds.dimaltz = data.dimaltz;
                     ds.dimalttz = data.dimalttz;
+                    // R2007+ fields
+                    ds.dimfxl = data.dimfxl;
+                    ds.dimjogang = data.dimjogang;
+                    ds.dimtfill = data.dimtfill;
+                    ds.dimtfillclr = data.dimtfillclr.index().unwrap_or(0) as i16;
+                    ds.dimarcsym = data.dimarcsym;
+                    ds.dimfxlon = data.dimfxlon;
+                    ds.dimtxtdirection = data.dimtxtdirection;
                     // Resolve text style handle
                     if data.dimtxsty_handle != 0 {
                         ds.dimtxsty_handle = Handle::from(data.dimtxsty_handle);
                         ds.dimtxsty = maps.text_styles.get(&data.dimtxsty_handle)
                             .cloned()
                             .unwrap_or_else(|| "Standard".to_string());
+                    }
+                    // R2000+ block handles
+                    if let Some(h) = data.dimldrblk_handle {
+                        ds.dimldrblk = Handle::from(h);
+                    }
+                    if let Some(h) = data.dimblk_handle {
+                        ds.dimblk = Handle::from(h);
+                    }
+                    if let Some(h) = data.dimblk1_handle {
+                        ds.dimblk1 = Handle::from(h);
+                    }
+                    if let Some(h) = data.dimblk2_handle {
+                        ds.dimblk2 = Handle::from(h);
+                    }
+                    // R2007+ linetype handles
+                    if data.dimltype_handle != 0 {
+                        ds.dimltex_handle = Handle::from(data.dimltype_handle);
+                    }
+                    if data.dimltex1_handle != 0 {
+                        ds.dimltex1_handle = Handle::from(data.dimltex1_handle);
+                    }
+                    if data.dimltex2_handle != 0 {
+                        ds.dimltex2_handle = Handle::from(data.dimltex2_handle);
                     }
                     let _ = document.dim_styles.remove(&data.name);
                     let _ = document.dim_styles.add(ds);

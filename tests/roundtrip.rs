@@ -1775,6 +1775,7 @@ real_dwg_roundtrip!(real_dwg_wedge_r2013, "wedge_r2013.dwg");
 real_dwg_roundtrip!(real_dwg_solid3d_r2013, "solid3d_r2013.dwg");
 real_dwg_roundtrip!(real_dwg_solid3d_r2004, "solid3d_r2004.dwg");
 real_dwg_roundtrip!(real_dwg_solid3d_r2000, "solid3d_r2000.dwg");
+real_dwg_roundtrip!(real_dwg_morki_general, "acadrust_morki/General.dwg");
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  EMPTY DOCUMENT ROUNDTRIP

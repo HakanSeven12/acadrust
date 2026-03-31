@@ -246,12 +246,22 @@ pub struct DimStyleData {
     pub dimfit: i16,
     pub dimlwd: i16,
     pub dimlwe: i16,
+    pub dimfxl: f64,
+    pub dimjogang: f64,
+    pub dimtfill: i16,
+    pub dimtfillclr: Color,
+    pub dimarcsym: i16,
+    pub dimfxlon: bool,
+    pub dimtxtdirection: bool,
     pub xref_handle: u64,
     pub dimtxsty_handle: u64,
     pub dimldrblk_handle: Option<u64>,
     pub dimblk_handle: Option<u64>,
     pub dimblk1_handle: Option<u64>,
     pub dimblk2_handle: Option<u64>,
+    pub dimltype_handle: u64,
+    pub dimltex1_handle: u64,
+    pub dimltex2_handle: u64,
 }
 
 /// Parsed BLOCK_HEADER (block record) data.
@@ -730,6 +740,9 @@ pub fn read_dimstyle(
         xref_handle: 0, dimtxsty_handle: 0,
         dimldrblk_handle: None, dimblk_handle: None,
         dimblk1_handle: None, dimblk2_handle: None,
+        dimltype_handle: 0, dimltex1_handle: 0, dimltex2_handle: 0,
+        dimfxl: 0.0, dimjogang: 0.0, dimtfill: 0, dimtfillclr: Color::from_index(0),
+        dimarcsym: 0, dimfxlon: false, dimtxtdirection: false,
     };
 
     // R2000+
@@ -749,10 +762,10 @@ pub fn read_dimstyle(
 
     // R2007+
     if version.r2007_plus() {
-        let _dimfxl = reader.read_bit_double();
-        let _dimjogang = reader.read_bit_double();
-        let _dimtfill = reader.read_bit_short();
-        let _dimtfillclr = reader.read_cm_color();
+        ds.dimfxl = reader.read_bit_double();
+        ds.dimjogang = reader.read_bit_double();
+        ds.dimtfill = reader.read_bit_short();
+        ds.dimtfillclr = reader.read_cm_color();
     }
 
     // R2000+
@@ -770,7 +783,7 @@ pub fn read_dimstyle(
 
     // R2007+
     if version.r2007_plus() {
-        let _dimarcsym = reader.read_bit_short();
+        ds.dimarcsym = reader.read_bit_short();
     }
 
     // R2000+
@@ -816,12 +829,12 @@ pub fn read_dimstyle(
 
     // R2007+
     if version.r2007_plus() {
-        let _dimfxlon = reader.read_bit();
+        ds.dimfxlon = reader.read_bit();
     }
 
     // R2010+
     if version.r2010_plus() {
-        let _dimtxtdirection = reader.read_bit();
+        ds.dimtxtdirection = reader.read_bit();
         let _dimaltmzf = reader.read_bit_double();
         let _dimaltmzs = reader.read_variable_text();
         let _dimmzf = reader.read_bit_double();
@@ -851,9 +864,9 @@ pub fn read_dimstyle(
 
     // R2007+
     if version.r2007_plus() {
-        let _dimltype = reader.read_handle();
-        let _dimltex1 = reader.read_handle();
-        let _dimltex2 = reader.read_handle();
+        ds.dimltype_handle = reader.read_handle();
+        ds.dimltex1_handle = reader.read_handle();
+        ds.dimltex2_handle = reader.read_handle();
     }
 
     ds

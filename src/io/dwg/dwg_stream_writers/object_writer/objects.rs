@@ -832,8 +832,8 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
 
-        // Cloning flags
-        self.writer.write_bit_short(xrec.cloning_flags as i16);
+        // Cloning flags (valid range 0..5; enum already constrains to valid values)
+        self.writer.write_bit_short(xrec.cloning_flags.to_value());
 
         // Write raw data bytes if present (from DWG roundtrip)
         if !xrec.raw_data.is_empty() {
