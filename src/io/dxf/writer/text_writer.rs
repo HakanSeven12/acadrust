@@ -12,7 +12,7 @@ use super::stream_writer::DxfStreamWriter;
 pub struct DxfTextWriter<W: Write> {
     writer: W,
     /// Reusable stack buffer for formatting numbers without heap allocation.
-    fmt_buf: [u8; 48],
+    fmt_buf: [u8; 64],
 }
 
 impl<W: Write> DxfTextWriter<W> {
@@ -20,7 +20,7 @@ impl<W: Write> DxfTextWriter<W> {
     pub fn new(writer: W) -> Self {
         Self {
             writer,
-            fmt_buf: [0u8; 48],
+            fmt_buf: [0u8; 64],
         }
     }
 
@@ -72,6 +72,52 @@ impl<W: Write> DxfTextWriter<W> {
     #[inline]
     fn format_double(&mut self, value: f64) -> usize {
         use std::io::Cursor;
+        // For extreme values (|v| >= 1e15), {:.16} may produce strings longer
+        // than the stack buffer.  Fall back to 0.0 for non-finite values and
+        // use a heap-allocated string for very large magnitudes.
+        if !value.is_finite() {
+            // NaN / Infinity → write 0.0
+            self.fmt_buf[0] = b'0';
+            self.fmt_buf[1] = b'.';
+            self.fmt_buf[2] = b'0';
+            self.fmt_buf[3] = b'\r';
+            self.fmt_buf[4] = b'\n';
+            return 5;
+        }
+        let abs = value.abs();
+        if abs >= 1e15 && abs != 0.0 {
+            // Large magnitude: use heap-allocated formatting to avoid overflow
+            let s = format!("{:.6}", value);
+            let trimmed = s.trim_end_matches('0');
+            let trimmed = if trimmed.ends_with('.') {
+                &s[..trimmed.len() + 1] // keep one digit after '.'
+            } else {
+                trimmed
+            };
+            // Write directly to the underlying writer (bypass fmt_buf)
+            // Return 0 to signal the caller that we already wrote
+            // Actually, we need to return the len for the caller pattern.
+            // Copy into fmt_buf if it fits, otherwise write directly.
+            let bytes = trimmed.as_bytes();
+            let total = bytes.len() + 2; // +CRLF
+            if total <= self.fmt_buf.len() {
+                self.fmt_buf[..bytes.len()].copy_from_slice(bytes);
+                self.fmt_buf[bytes.len()] = b'\r';
+                self.fmt_buf[bytes.len() + 1] = b'\n';
+                return total;
+            }
+            // Extremely rare: value so large even 6 decimals exceeds buffer
+            // Truncate to integer representation
+            let s2 = format!("{:.0}", value);
+            let b2 = s2.as_bytes();
+            let t2 = b2.len().min(self.fmt_buf.len() - 4);
+            self.fmt_buf[..t2].copy_from_slice(&b2[..t2]);
+            self.fmt_buf[t2] = b'.';
+            self.fmt_buf[t2 + 1] = b'0';
+            self.fmt_buf[t2 + 2] = b'\r';
+            self.fmt_buf[t2 + 3] = b'\n';
+            return t2 + 4;
+        }
         let mut cursor = Cursor::new(&mut self.fmt_buf[..]);
         // write! into a Cursor<&mut [u8]> does not allocate
         let _ = write!(cursor, "{:.16}", value);
@@ -101,7 +147,18 @@ impl<W: Write> DxfStreamWriter for DxfTextWriter<W> {
     #[inline]
     fn write_string(&mut self, code: i32, value: &str) -> Result<()> {
         self.write_code(code)?;
-        self.write_value_crlf(value.as_bytes())?;
+        // DXF text format is line-based: literal newlines in string values
+        // would corrupt the file.  Replace them with the MText paragraph
+        // marker \P which is the standard convention in DXF/DWG ecosystems.
+        if value.contains('\n') || value.contains('\r') {
+            let sanitized = value
+                .replace("\r\n", "\\P")
+                .replace('\r', "\\P")
+                .replace('\n', "\\P");
+            self.write_value_crlf(sanitized.as_bytes())?;
+        } else {
+            self.write_value_crlf(value.as_bytes())?;
+        }
         Ok(())
     }
 

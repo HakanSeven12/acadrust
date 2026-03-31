@@ -1863,7 +1863,9 @@ fn read_multileader_annotation_context(
         let _unknown = reader.read_bit();
     }
 
-    let has_block_contents = reader.read_bit();
+    // has_block_contents bit is only present when has_text_contents is false
+    // (else-if structure in the DWG format — text and block are mutually exclusive)
+    let mut has_block_contents = false;
 
     let mut block_content_handle: Option<Handle> = None;
     let mut block_content_normal = Vector3::UNIT_Z;
@@ -1878,17 +1880,21 @@ fn read_multileader_annotation_context(
     transform_matrix[10] = 1.0;
     transform_matrix[15] = 1.0;
 
-    if has_block_contents {
-        let bh = reader.read_handle();
-        block_content_handle = if bh != 0 { Some(Handle::from(bh)) } else { None };
-        block_content_normal = reader.read_3bit_double();
-        block_content_location = reader.read_3bit_double();
-        block_content_scale = reader.read_3bit_double();
-        block_rotation = reader.read_bit_double();
-        block_content_color = reader.read_cm_color();
+    if !has_text_contents {
+        has_block_contents = reader.read_bit();
 
-        for i in 0..16 {
-            transform_matrix[i] = reader.read_bit_double();
+        if has_block_contents {
+            let bh = reader.read_handle();
+            block_content_handle = if bh != 0 { Some(Handle::from(bh)) } else { None };
+            block_content_normal = reader.read_3bit_double();
+            block_content_location = reader.read_3bit_double();
+            block_content_scale = reader.read_3bit_double();
+            block_rotation = reader.read_bit_double();
+            block_content_color = reader.read_cm_color();
+
+            for i in 0..16 {
+                transform_matrix[i] = reader.read_bit_double();
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-﻿//! Entity serialization for DWG object records.
+//! Entity serialization for DWG object records.
 //!
 //! Each entity writer:
 //! 1. Calls `write_common_entity_data()` (type code + preamble)
@@ -517,6 +517,23 @@ impl<'a> DwgObjectWriter<'a> {
         // Has ATTRIBs B 66
         self.writer.write_bit(e.has_attributes());
 
+        // R2004+: owned object count when has_attribs
+        let (attrib_handles, seqend_handle) = if e.has_attributes() {
+            let ahs: Vec<Handle> = (0..e.attributes.len())
+                .map(|_| self.alloc_handle())
+                .collect();
+            let sh = self.alloc_handle();
+
+            if self.version.r2004_plus() {
+                // owned_object_count = attribs (SEQEND written separately)
+                self.writer
+                    .write_bit_long(e.attributes.len() as i32);
+            }
+            (ahs, sh)
+        } else {
+            (Vec::new(), Handle::NULL)
+        };
+
         // Block header ref (hard pointer)
         let block_handle = self
             .document
@@ -527,7 +544,149 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer
             .write_handle(DwgReferenceType::HardPointer, block_handle.value());
 
+        // Attribute owned handles (if present)
+        if e.has_attributes() {
+            if self.version.r13_15_only() {
+                // R13-R2000: first attrib, last attrib
+                let first = attrib_handles.first().copied().unwrap_or(Handle::NULL);
+                let last = attrib_handles.last().copied().unwrap_or(Handle::NULL);
+                self.writer
+                    .write_handle(DwgReferenceType::SoftPointer, first.value());
+                self.writer
+                    .write_handle(DwgReferenceType::SoftPointer, last.value());
+            } else if self.version.r2004_plus() {
+                for &ah in &attrib_handles {
+                    self.writer
+                        .write_handle(DwgReferenceType::HardOwnership, ah.value());
+                }
+            }
+            // SEQEND handle
+            self.writer
+                .write_handle(DwgReferenceType::HardOwnership, seqend_handle.value());
+        }
+
         self.register_object(e.common.handle);
+
+        // Write child ATTRIB entities + SEQEND
+        if e.has_attributes() {
+            let saved_prev = self.prev_handle.take();
+            let saved_next = self.next_handle.take();
+
+            let sub_count = attrib_handles.len() + 1; // attribs + seqend
+            for (i, (att, &ah)) in e.attributes.iter().zip(attrib_handles.iter()).enumerate() {
+                self.prev_handle = if i > 0 {
+                    Some(attrib_handles[i - 1])
+                } else {
+                    None
+                };
+                self.next_handle = if i + 1 < sub_count {
+                    if i + 1 < attrib_handles.len() {
+                        Some(attrib_handles[i + 1])
+                    } else {
+                        Some(seqend_handle)
+                    }
+                } else {
+                    None
+                };
+                self.write_attribute_entity_child(att, ah, e.common.handle);
+            }
+
+            // Write SEQEND
+            self.prev_handle = attrib_handles.last().copied();
+            self.next_handle = None;
+            self.write_common_entity_data(
+                common::OBJ_SEQEND,
+                seqend_handle,
+                e.common.handle,
+                &e.common.layer,
+                &e.common.color,
+                &crate::types::LineWeight::ByLayer,
+                &crate::types::Transparency::default(),
+                false,
+                1.0,
+                "ByLayer",
+                &crate::xdata::ExtendedData::default(),
+                &[],
+                &None,
+            );
+            self.register_object(seqend_handle);
+
+            self.prev_handle = saved_prev;
+            self.next_handle = saved_next;
+        }
+    }
+
+    /// Write a child ATTRIB entity owned by an INSERT.
+    fn write_attribute_entity_child(
+        &mut self,
+        att: &AttributeEntity,
+        handle: Handle,
+        owner: Handle,
+    ) {
+        self.write_common_entity_data(
+            common::OBJ_ATTRIB,
+            handle,
+            owner,
+            &att.common.layer,
+            &att.common.color,
+            &att.common.line_weight,
+            &att.common.transparency,
+            att.common.invisible,
+            att.common.linetype_scale,
+            &att.common.linetype,
+            &att.common.extended_data,
+            &att.common.reactors,
+            &att.common.xdictionary_handle,
+        );
+
+        // writeTextEntity portion
+        self.write_text_entity_data(
+            att.insertion_point,
+            att.alignment_point,
+            att.normal,
+            0.0, // thickness
+            att.oblique_angle,
+            att.rotation,
+            att.height,
+            att.width_factor,
+            &att.value,
+            0,  // generation (text mirror flags)
+            att.horizontal_alignment as i16,
+            att.vertical_alignment as i16,
+        );
+
+        // Style handle
+        let style_handle = self
+            .document
+            .text_styles
+            .get(&att.text_style)
+            .map(|s| s.handle)
+            .unwrap_or(Handle::NULL);
+        self.writer
+            .write_handle(DwgReferenceType::HardPointer, style_handle.value());
+
+        // writeCommonAttData: R2010+ version byte
+        if self.version.r2010_plus() {
+            self.writer.write_byte(0);
+        }
+
+        // R2018+: AttributeType byte
+        if self.version.r2018_plus(self.dxf_version) {
+            self.writer.write_byte(1); // SingleLine
+        }
+
+        // Tag, field length, flags
+        self.writer.write_variable_text(&att.tag);
+        self.writer.write_bit_short(att.field_length);
+        let flag_byte = att.flags.to_bits();
+        self.writer.write_byte(flag_byte as u8);
+
+        // R2007+: lock position
+        if self.version.r2007_plus() {
+            self.writer.write_bit(false);
+        }
+
+        self.register_object(handle);
     }
 
     // â”€â”€ LwPolyline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -2388,29 +2547,29 @@ impl<'a> DwgObjectWriter<'a> {
             self.writer.write_bit(ctx.word_break);
             // B Unknown
             self.writer.write_bit(false);
-        }
+        } else {
+            // B 296 Has contents block - only written when has_text_contents is false
+            self.writer.write_bit(ctx.has_block_contents);
 
-        // B 296 Has contents block â€” ALWAYS written (after text block)
-        self.writer.write_bit(ctx.has_block_contents);
-
-        if ctx.has_block_contents {
-            // H 341 Block table record handle (soft pointer)
-            let bh = ctx.block_content_handle.unwrap_or(Handle::NULL);
-            self.writer.write_handle(DwgReferenceType::SoftPointer, bh.value());
-            // 3BD 14 Normal vector
-            self.writer.write_3bit_double(ctx.block_content_normal);
-            // 3BD 15 Location
-            self.writer.write_3bit_double(ctx.block_content_location);
-            // 3BD 16 Scale vector
-            self.writer.write_3bit_double(ctx.block_content_scale);
-            // BD 46 Rotation (radians)
-            self.writer.write_bit_double(ctx.block_rotation);
-            // CMC 93 Block color
-            self.writer.write_cm_color(&ctx.block_content_color);
-            
-            // BD (16) 47 - 16 doubles for transformation matrix
-            for i in 0..16 {
-                self.writer.write_bit_double(ctx.transform_matrix[i]);
+            if ctx.has_block_contents {
+                // H 341 Block table record handle (soft pointer)
+                let bh = ctx.block_content_handle.unwrap_or(Handle::NULL);
+                self.writer.write_handle(DwgReferenceType::SoftPointer, bh.value());
+                // 3BD 14 Normal vector
+                self.writer.write_3bit_double(ctx.block_content_normal);
+                // 3BD 15 Location
+                self.writer.write_3bit_double(ctx.block_content_location);
+                // 3BD 16 Scale vector
+                self.writer.write_3bit_double(ctx.block_content_scale);
+                // BD 46 Rotation (radians)
+                self.writer.write_bit_double(ctx.block_rotation);
+                // CMC 93 Block color
+                self.writer.write_cm_color(&ctx.block_content_color);
+                
+                // BD (16) 47 - 16 doubles for transformation matrix
+                for i in 0..16 {
+                    self.writer.write_bit_double(ctx.transform_matrix[i]);
+                }
             }
         }
 

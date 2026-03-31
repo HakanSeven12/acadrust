@@ -30,6 +30,38 @@ use crate::io::dwg::dwg_version::DwgVersion;
 use crate::tables::BlockRecord;
 use crate::types::{BoundingBox3D, DxfVersion, Handle, Vector2};
 
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/// Convert a deduplicated block name back to the DWG binary name.
+///
+/// In DWG format, all paper-space blocks are stored as `*Paper_Space`
+/// and anonymous blocks share names like `*U`, `*D`, etc. (no numeric
+/// suffixes).  Our reader adds suffixes (`*Paper_Space0`, `*U1`, …)
+/// for deduplication.  This function strips them back for writing.
+fn dwg_block_name(name: &str) -> &str {
+    // Known multi-word prefixes first
+    for prefix in &["*Paper_Space", "*Model_Space"] {
+        if name.starts_with(prefix) {
+            let rest = &name[prefix.len()..];
+            if rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()) {
+                return prefix;
+            }
+        }
+    }
+    // Generic anonymous: *<alpha><digits> → *<alpha>
+    if name.starts_with('*') && name.len() >= 2 {
+        let alpha_end = name[1..]
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .map(|p| 1 + p)
+            .unwrap_or(name.len());
+        let rest = &name[alpha_end..];
+        if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+            return &name[..alpha_end];
+        }
+    }
+    name
+}
+
 // ── Public struct ───────────────────────────────────────────────────
 
 /// Writes all DWG object records (entities + table entries + objects)
@@ -418,7 +450,7 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_variable_text(&layer.name);
 
         // Xref-dependant bit
-        self.write_xref_dependant_bit();
+        self.write_xref_dependant_bit_value(layer.flags.xref_dependent);
 
         if self.version.r2000_plus() {
             let lw_index = layer.line_weight.to_dwg_index() as i16;
@@ -1378,8 +1410,9 @@ impl<'a> DwgObjectWriter<'a> {
             &None,
         );
 
-        // Entry name
-        self.writer.write_variable_text(&record.name);
+        // Entry name (DWG uses bare names without numeric suffixes)
+        let dwg_name = dwg_block_name(&record.name);
+        self.writer.write_variable_text(dwg_name);
         // Xref dependant
         self.write_xref_dependant_bit();
 
@@ -1527,7 +1560,7 @@ impl<'a> DwgObjectWriter<'a> {
             &common.xdictionary_handle,
         );
 
-        self.writer.write_variable_text(name);
+        self.writer.write_variable_text(dwg_block_name(name));
 
         self.register_object(common.handle);
     }

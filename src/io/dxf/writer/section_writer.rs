@@ -413,6 +413,9 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         if layer.is_locked() {
             flags |= 4;
         }
+        if layer.flags.xref_dependent {
+            flags |= 0x10;
+        }
         self.writer.write_i16(70, flags)?;
 
         // Color (negative if layer is off)
@@ -1250,13 +1253,29 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_i16(71, mtext.attachment_point as i16)?;
         self.writer.write_i16(72, mtext.drawing_direction as i16)?;
 
-        // Write text value (may need to be split for long text)
-        let text = &mtext.value;
+        // Write text value (may need to be split for long text).
+        // DXF text format is line-based, so literal \n / \r in the value would
+        // corrupt the file.  Replace them with the MText paragraph mark \P.
+        let sanitized;
+        let text: &str = if mtext.value.contains('\n') || mtext.value.contains('\r') {
+            sanitized = mtext.value.replace("\r\n", "\\P").replace('\r', "\\P").replace('\n', "\\P");
+            &sanitized
+        } else {
+            &mtext.value
+        };
         if text.len() > 250 {
-            // Split into chunks
-            let mut remaining = text.as_str();
+            // Split into chunks at char boundaries
+            let mut remaining = text;
             while remaining.len() > 250 {
-                let (chunk, rest) = remaining.split_at(250);
+                // Find a valid char boundary at or before byte 250
+                let mut split_pos = 250;
+                while split_pos > 0 && !remaining.is_char_boundary(split_pos) {
+                    split_pos -= 1;
+                }
+                if split_pos == 0 {
+                    split_pos = remaining.len();
+                }
+                let (chunk, rest) = remaining.split_at(split_pos);
                 self.writer.write_string(3, chunk)?;
                 remaining = rest;
             }

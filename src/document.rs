@@ -1310,10 +1310,14 @@ impl CadDocument {
             entity.common_mut().owner_handle = ms_handle;
         }
 
+        // AttributeEntity is a sub-entity owned by INSERT, not a direct
+        // block-record child.  Never add it to entity_handles.
+        let is_attrib = matches!(&entity, EntityType::AttributeEntity(_));
+
         // Route entity handle to the correct block record based on owner handle.
         let owner = entity.common().owner_handle;
         let mut added_to_block = false;
-        if !owner.is_null() {
+        if !is_attrib && !owner.is_null() {
             for br in self.block_records.iter_mut() {
                 if br.handle == owner {
                     br.entity_handles.push(handle);
@@ -1323,7 +1327,7 @@ impl CadDocument {
             }
         }
         // Fallback: add to *Model_Space if owner didn't match any block record
-        if !added_to_block {
+        if !is_attrib && !added_to_block {
             if let Some(ms) = self.block_records.get_mut("*Model_Space") {
                 ms.entity_handles.push(handle);
                 // Fix the entity's owner so the writer can determine

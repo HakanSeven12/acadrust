@@ -1497,6 +1497,7 @@ impl<'a> SectionReader<'a> {
                         layer.flags.frozen = (flags & 1) != 0;
                         layer.flags.locked = (flags & 4) != 0;
                         layer.flags.off = (flags & 2) != 0;
+                        layer.flags.xref_dependent = (flags & 0x10) != 0;
                     }
                 }
                 290 => {

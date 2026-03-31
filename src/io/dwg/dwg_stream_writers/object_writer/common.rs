@@ -526,16 +526,22 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     // ── write_xref_dependant_bit ────────────────────────────────────
-    /// 64-group "xref dependant" flag (always false for now).
+    /// 64-group "xref dependant" flag.
     pub fn write_xref_dependant_bit(&mut self) {
+        self.write_xref_dependant_bit_value(false);
+    }
+
+    /// 64-group "xref dependant" flag with explicit value.
+    pub fn write_xref_dependant_bit_value(&mut self, xref_dep: bool) {
         if self.version.r2007_plus() {
             // R2007+: xrefindex+1 BS 70 (combined flags)
-            self.writer.write_bit_short(0);
+            let combined: i16 = if xref_dep { 0x10 } else { 0 };
+            self.writer.write_bit_short(combined);
         } else {
             // Pre-R2007: 64-flag B (Referenced), xrefindex+1 BS, Xdep B (XrefDependent)
             self.writer.write_bit(false); // referenced flag
             self.writer.write_bit_short(0); // xrefindex+1
-            self.writer.write_bit(false); // xref dependent flag
+            self.writer.write_bit(xref_dep); // xref dependent flag
         }
     }
 

@@ -52,6 +52,7 @@ pub struct LayerData {
     pub plottable: bool,
     pub line_weight: i16,
     pub color: Color,
+    pub xref_dependent: bool,
     pub xref_handle: u64,
     pub plotstyle_handle: Option<u64>,
     pub material_handle: Option<u64>,
@@ -283,16 +284,20 @@ pub struct BlockHeaderData {
 // ════════════════════════════════════════════════════════════════════════
 
 /// Read xref-dependant bits for a table entry.
+/// Returns `true` if the entry is xref-dependent.
 /// - Pre-R2007: B (64-flag) + BS (xrefindex+1) + B (xdep)
 /// - R2007+: BS (combined)
-fn read_xref_dependant_bits(reader: &mut DwgMergedReader, version: DwgVersion) {
+fn read_xref_dependant_bits(reader: &mut DwgMergedReader, version: DwgVersion) -> bool {
     if version.r2007_plus() {
-        let _combined = reader.read_bit_short();
+        let combined = reader.read_bit_short();
+        // Bit 0x40 = xref_64, bit 0x10 = xref_dep
+        (combined & 0x10) != 0
     } else {
         // Pre-R2007 (R13/R14/R2000-R2006): B + BS + B
         let _xref_64 = reader.read_bit();
         let _xref_index = reader.read_bit_short();
-        let _xref_dep = reader.read_bit();
+        let xref_dep = reader.read_bit();
+        xref_dep
     }
 }
 
@@ -340,7 +345,7 @@ pub fn read_layer(
     let name = reader.read_variable_text();
 
     // Xref-dependant bits (version-dependent encoding)
-    read_xref_dependant_bits(reader, version);
+    let xref_dependent = read_xref_dependant_bits(reader, version);
 
     let frozen;
     let off;
@@ -396,7 +401,7 @@ pub fn read_layer(
 
     LayerData {
         name, frozen, off, frozen_in_new_vp, locked, plottable,
-        line_weight, color, xref_handle, plotstyle_handle,
+        line_weight, color, xref_dependent, xref_handle, plotstyle_handle,
         material_handle, linetype_handle, unknown_handle,
     }
 }

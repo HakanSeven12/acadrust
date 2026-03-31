@@ -13,6 +13,8 @@ pub struct LayerFlags {
     pub locked: bool,
     /// Layer is off (invisible)
     pub off: bool,
+    /// Layer is xref-dependent (name contains `|`)
+    pub xref_dependent: bool,
 }
 
 impl LayerFlags {
@@ -22,6 +24,7 @@ impl LayerFlags {
             frozen: false,
             locked: false,
             off: false,
+            xref_dependent: false,
         }
     }
 

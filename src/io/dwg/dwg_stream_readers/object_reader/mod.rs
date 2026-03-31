@@ -342,8 +342,13 @@ impl DwgObjectReader {
         let has_graphic = reader.read_bit();
         if has_graphic {
             // Skip graphic data (preview image)
-            let graphic_size = reader.read_raw_long();
-            for _ in 0..safe_count(graphic_size as i32) {
+            // R2010+: BLL (Bit Long Long); pre-R2010: RL (Raw Long)
+            let graphic_size = if self.version.r2010_plus() {
+                reader.read_bit_long_long()
+            } else {
+                reader.read_raw_long() as i64
+            };
+            for _ in 0..graphic_size.max(0) {
                 reader.read_byte();
             }
         }

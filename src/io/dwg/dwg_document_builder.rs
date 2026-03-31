@@ -308,11 +308,93 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // ── Deduplicate block names ────────────────────────────────────
+        //
+        // DWG binary format stores ALL paper-space blocks as "*Paper_Space"
+        // and anonymous blocks share names ("*U", "*D", etc.).  Our
+        // Table<BlockRecord> is keyed by name, so duplicates would
+        // overwrite each other.  Rename duplicates using the DXF
+        // convention: *Paper_Space, *Paper_Space0, *Paper_Space1, …
+        //
+        // The header's model_space_block_handle / paper_space_block_handle
+        // (read from the DWG file header before this function) identify
+        // the "active" model/paper space blocks, which keep their
+        // canonical names.
+        {
+            let active_model = document.header.model_space_block_handle;
+            let active_paper = document.header.paper_space_block_handle;
+
+            // Collect (index, handle, base_name) for all Block entries
+            let block_info: Vec<(usize, u64, String)> = parsed_entries
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, e)| {
+                    if let ParsedEntry::Block(h, data) = e {
+                        Some((idx, *h, data.name.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Group by name
+            let mut name_groups: std::collections::HashMap<String, Vec<(usize, u64)>> =
+                std::collections::HashMap::new();
+            for (idx, h, name) in &block_info {
+                name_groups
+                    .entry(name.clone())
+                    .or_default()
+                    .push((*idx, *h));
+            }
+
+            // Rename duplicates
+            for (base_name, entries) in &name_groups {
+                if entries.len() <= 1 {
+                    continue;
+                }
+                // Determine which entry keeps the canonical (un-suffixed)
+                // name.  Prefer the one matching the header's active
+                // model/paper space handle; fall back to the first entry.
+                let active_h = if base_name == "*Model_Space" {
+                    active_model
+                } else if base_name == "*Paper_Space" {
+                    active_paper
+                } else {
+                    Handle::NULL
+                };
+
+                let canonical_idx = entries
+                    .iter()
+                    .find(|(_, h)| !active_h.is_null() && Handle::from(*h) == active_h)
+                    .or_else(|| entries.first())
+                    .map(|&(idx, _)| idx);
+
+                let mut suffix = 0usize;
+                for &(idx, h) in entries {
+                    if Some(idx) == canonical_idx {
+                        continue; // keep canonical name
+                    }
+                    let new_name = format!("{}{}", base_name, suffix);
+                    if let ParsedEntry::Block(_, ref mut data) = parsed_entries[idx] {
+                        data.name = new_name.clone();
+                    }
+                    maps.blocks.insert(h, new_name);
+                    suffix += 1;
+                }
+            }
+        }
+
         // ── Post-Pass 1: Populate document tables from parsed data ─────
         //
         // Now that all handle→name maps are complete, create domain objects
         // with resolved cross-references and add them to the document.
-        // Remove any default entries first to avoid duplicates.
+        //
+        // Clear initialisation-defaults for block records first: the
+        // defaults (created by CadDocument::new()) use handles 0x15 / 0x18
+        // which may collide with objects from the DWG file.
+        let _ = document.block_records.remove("*Model_Space");
+        let _ = document.block_records.remove("*Paper_Space");
+
         for entry in &parsed_entries {
             match entry {
                 ParsedEntry::Layer(h, data) => {
@@ -321,6 +403,7 @@ impl DwgDocumentBuilder {
                     layer.flags.frozen = data.frozen;
                     layer.flags.off = data.off;
                     layer.flags.locked = data.locked;
+                    layer.flags.xref_dependent = data.xref_dependent;
                     layer.is_plottable = data.plottable;
                     layer.line_weight = LineWeight::from_value(data.line_weight);
                     layer.color = data.color;
@@ -348,9 +431,12 @@ impl DwgDocumentBuilder {
                         br.layout = Handle::from(layout_h);
                     }
                     // Update header handles for model/paper space
+                    // (uses the deduplicated name, so only the active block
+                    // with the canonical name "*Model_Space" / "*Paper_Space"
+                    // sets the header handle)
                     if data.name.eq_ignore_ascii_case("*Model_Space") {
                         document.header.model_space_block_handle = br.handle;
-                    } else if data.name.eq_ignore_ascii_case("*Paper_Space") {
+                    } else if data.name == "*Paper_Space" {
                         document.header.paper_space_block_handle = br.handle;
                     }
                     // Remove default entry if it exists, then add
@@ -507,11 +593,27 @@ impl DwgDocumentBuilder {
             }
         }
 
+        // Build a reverse map: entity_handle → block_record_handle
+        // from the canonical entity_handles read from the DWG binary
+        // (R2004+).  This is needed because entity_mode=1 only says
+        // "paper space" without specifying WHICH paper space.
+        let mut binary_entity_owner: HashMap<Handle, Handle> = HashMap::new();
+        for entry in &parsed_entries {
+            if let ParsedEntry::Block(h, data) = entry {
+                let br_handle = Handle::from(*h);
+                for &eh in &data.entity_handles {
+                    binary_entity_owner.insert(Handle::from(eh), br_handle);
+                }
+            }
+        }
+
         // ── Pass 2: Read entities and non-table objects ────────────────
         let mut pending = PendingPolylines {
             vertices: HashMap::new(),
             polylines: Vec::new(),
         };
+        // Pending attribute entities keyed by owner (INSERT) handle.
+        let mut pending_attributes: HashMap<u64, Vec<AttributeEntity>> = HashMap::new();
         for &handle in &handles {
             let offset = match self.obj_reader.offset_for(handle) {
                 Some(o) if o >= 0 => o,
@@ -526,7 +628,7 @@ impl DwgDocumentBuilder {
             // Wrap per-object processing in catch_unwind to survive
             // corrupt or misaligned records without crashing the entire read.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.process_pass2_record(handle, type_code, reader, document, &maps, &mut pending, &entity_class_numbers);
+                self.process_pass2_record(handle, type_code, reader, document, &maps, &mut pending, &mut pending_attributes, &entity_class_numbers);
             }));
             if let Err(ref _e) = result {
                 skipped_pass2 += 1;
@@ -619,6 +721,80 @@ impl DwgDocumentBuilder {
             let _ = document.add_entity(entity);
         }
 
+        // ── Post-pass: Attach pending attribute entities to parent INSERTs ──
+        if !pending_attributes.is_empty() {
+            for entity in &mut document.entities {
+                if let EntityType::Insert(ref mut ins) = entity {
+                    let insert_handle = ins.common.handle.value();
+                    if let Some(attribs) = pending_attributes.remove(&insert_handle) {
+                        ins.attributes = attribs;
+                    }
+                }
+            }
+        }
+
+        // ── Post-pass: Correct entity ownership from binary data ───────
+        //
+        // The DWG entity_mode=1 flag means "paper space entity" but does
+        // NOT specify WHICH paper space.  During Pass 2, all entity_mode=1
+        // entities were routed to the single *Paper_Space block record.
+        // Use the canonical entity_handle lists from the binary block
+        // records (R2004+) to correct ownership for entities that belong
+        // to non-active paper spaces (*Paper_Space0, *Paper_Space1, etc.).
+        if !binary_entity_owner.is_empty() {
+            // 1. Fix entity owner handles from the binary source of truth
+            for entity in &mut document.entities {
+                let eh = entity.common().handle;
+                if let Some(&correct_owner) = binary_entity_owner.get(&eh) {
+                    if entity.common().owner_handle != correct_owner {
+                        entity.common_mut().owner_handle = correct_owner;
+                    }
+                }
+            }
+            // 2. Rebuild block_record.entity_handles from corrected owners,
+            //    excluding AttributeEntity (sub-entities of INSERT, not
+            //    direct block record children).
+            for br in document.block_records.iter_mut() {
+                br.entity_handles.clear();
+            }
+            let ms_handle = document.header.model_space_block_handle;
+            let entity_owners: Vec<(Handle, Handle, bool)> = document
+                .entities
+                .iter()
+                .map(|e| (
+                    e.common().handle,
+                    e.common().owner_handle,
+                    matches!(e, EntityType::AttributeEntity(_)),
+                ))
+                .collect();
+            for (eh, owner, is_attrib) in entity_owners {
+                // AttributeEntity is a sub-entity of INSERT and must NOT
+                // appear in any block record's entity_handles list.
+                if is_attrib {
+                    continue;
+                }
+                let mut added = false;
+                if !owner.is_null() {
+                    for br in document.block_records.iter_mut() {
+                        if br.handle == owner {
+                            br.entity_handles.push(eh);
+                            added = true;
+                            break;
+                        }
+                    }
+                }
+                // Fallback: route to *Model_Space if owner match not found
+                if !added && !ms_handle.is_null() {
+                    for br in document.block_records.iter_mut() {
+                        if br.handle == ms_handle {
+                            br.entity_handles.push(eh);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // Summary notification
         let total_skipped = skipped_pass1 + skipped_pass2;
         if total_skipped > 0 {
@@ -647,6 +823,7 @@ impl DwgDocumentBuilder {
         document: &mut CadDocument,
         maps: &HandleMaps,
         pending: &mut PendingPolylines,
+        pending_attributes: &mut HashMap<u64, Vec<AttributeEntity>>,
         entity_class_numbers: &std::collections::HashSet<i16>,
     ) {
         // For class-based types (≥500) that weren't resolved via the class
@@ -1289,7 +1466,12 @@ impl DwgDocumentBuilder {
                     e.insertion_point = data.text_data.insertion_point;
                     e.height = data.text_data.height;
                     e.rotation = data.text_data.rotation;
-                    let _ = document.add_entity(EntityType::AttributeEntity(e));
+                    // Collect pending — will be attached to parent INSERT
+                    // after Pass 2 (owner_handle = INSERT handle).
+                    pending_attributes
+                        .entry(entity_data.owner_handle)
+                        .or_default()
+                        .push(e);
                 },
 
                 // ── Structural markers (BLOCK / ENDBLK / SEQEND) ──
