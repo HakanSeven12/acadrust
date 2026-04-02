@@ -807,7 +807,6 @@ impl DwgDocumentBuilder {
         // to non-active paper spaces (*Paper_Space0, *Paper_Space1, etc.).
         if !binary_entity_owner.is_empty() {
             // 1. Fix entity owner handles from the binary source of truth
-            let mut correction_count = 0u32;
             for entity in &mut document.entities {
                 let eh = entity.common().handle;
                 if let Some(&correct_owner) = binary_entity_owner.get(&eh) {
@@ -819,7 +818,6 @@ impl DwgDocumentBuilder {
                             entity.common().owner_handle.value(),
                             correct_owner.value(),
                         );
-                        correction_count += 1;
                         entity.common_mut().owner_handle = correct_owner;
                     }
                 }

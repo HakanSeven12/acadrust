@@ -12,7 +12,7 @@ Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp). Supports DXF (ASCII
 
 ```toml
 [dependencies]
-acadrust = "0.3.2"
+acadrust = "0.3.3"
 ```
 
 ```rust
