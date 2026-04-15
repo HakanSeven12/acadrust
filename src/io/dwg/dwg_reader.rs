@@ -680,7 +680,14 @@ impl<R: Read + Seek> DwgReader<R> {
             let page_number = cursor.read_i32::<LittleEndian>()?;
             let page_size = cursor.read_i32::<LittleEndian>()?;
 
-            if page_number > 0 && page_size > 0 {
+            // Entries with page_size <= 0 are alignment/padding markers
+            // emitted by AutoCAD; skip them so they don't corrupt the
+            // running file offset.
+            if page_size <= 0 {
+                continue;
+            }
+
+            if page_number > 0 {
                 info.page_records.insert(page_number, (file_offset, page_size as i64));
             }
             file_offset += page_size as i64;

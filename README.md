@@ -150,7 +150,7 @@ Full API docs: [docs.rs/acadrust](https://docs.rs/acadrust)
 
 - **DWG roundtrip expanded** — Roundtrip workflows now cover supported DWG versions end-to-end, with additional byte-level diagnostics and compatibility fixes in the writer pipeline.
 
-- **DXF output compatibility** — ASCII DXF roundtrip support was tightened across multiple versions, including symbol name sanitization and corrected subclass marker emission.
+- **DXF output compatibility** — ASCII and Binary DXF roundtrip support tightened across multiple versions, including symbol name sanitization, corrected subclass marker emission, and newline-to-`\P` paragraph marker conversion in Binary DXF strings.
 
 - **ACIS downgrade support** — ACIS SAT/SAB handling now downgrades incompatible record layouts for older consumers, improving 3DSOLID interoperability.
 

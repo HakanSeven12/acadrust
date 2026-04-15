@@ -46,7 +46,19 @@ impl<W: Write> DxfBinaryWriter<W> {
 impl<W: Write> DxfStreamWriter for DxfBinaryWriter<W> {
     fn write_string(&mut self, code: i32, value: &str) -> Result<()> {
         self.write_code(code)?;
-        self.write_null_string(value)?;
+        // Sanitize embedded newlines to DXF paragraph markers, matching the
+        // ASCII writer.  While binary DXF uses null-terminated strings (so raw
+        // newlines won't structurally break the file), many AutoCAD consumers
+        // still expect \P instead of literal line breaks in string values.
+        if value.contains('\n') || value.contains('\r') {
+            let sanitized = value
+                .replace("\r\n", "\\P")
+                .replace('\r', "\\P")
+                .replace('\n', "\\P");
+            self.write_null_string(&sanitized)?;
+        } else {
+            self.write_null_string(value)?;
+        }
         Ok(())
     }
     
@@ -177,6 +189,21 @@ mod tests {
         let sentinel_len = BINARY_DXF_SENTINEL.len();
         assert_eq!(buf[sentinel_len..sentinel_len+2], [62, 0]); // code 62
         assert_eq!(buf[sentinel_len+2..sentinel_len+4], [7, 0]); // value 7
+    }
+    
+    #[test]
+    fn test_write_string_newline_sanitization() {
+        let mut buf = Vec::new();
+        {
+            let mut writer = DxfBinaryWriter::new(&mut buf).unwrap();
+            writer.write_string(1, "Hello\r\nWorld\nFoo\rBar").unwrap();
+        }
+        let sentinel_len = BINARY_DXF_SENTINEL.len();
+        // code (2 bytes) + sanitized string + null
+        let str_start = sentinel_len + 2;
+        let str_end = buf[str_start..].iter().position(|&b| b == 0).unwrap() + str_start;
+        let written = std::str::from_utf8(&buf[str_start..str_end]).unwrap();
+        assert_eq!(written, "Hello\\PWorld\\PFoo\\PBar");
     }
 }
 

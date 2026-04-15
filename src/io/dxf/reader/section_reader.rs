@@ -5906,4 +5906,74 @@ mod tests {
             panic!("Expected Line entity");
         }
     }
+
+    /// Helper: write to binary DXF, read back.
+    fn roundtrip_binary(doc: CadDocument) -> CadDocument {
+        let writer = crate::io::dxf::writer::DxfWriter::new_binary(&doc);
+        let bytes = writer.write_to_vec().expect("binary write_to_vec");
+        let cursor = std::io::Cursor::new(bytes);
+        let reader = crate::io::dxf::reader::DxfReader::from_reader(cursor).expect("binary from_reader");
+        reader.read().expect("binary read")
+    }
+
+    #[test]
+    fn test_binary_dxf_roundtrip_line() {
+        let mut doc = CadDocument::new();
+        let mut line = crate::entities::line::Line::new();
+        line.start = Vector3::new(1.0, 2.0, 3.0);
+        line.end = Vector3::new(4.0, 5.0, 6.0);
+        line.thickness = 1.5;
+        doc.add_entity(EntityType::Line(line));
+
+        let doc2 = roundtrip_binary(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Line(ref l) = entities[0] {
+            assert!((l.start.x - 1.0).abs() < 1e-9);
+            assert!((l.end.z - 6.0).abs() < 1e-9);
+            assert!((l.thickness - 1.5).abs() < 1e-9);
+        } else {
+            panic!("Expected Line entity");
+        }
+    }
+
+    #[test]
+    fn test_binary_dxf_roundtrip_mtext_newlines() {
+        let mut doc = CadDocument::new();
+        let mut mtext = crate::entities::mtext::MText::new();
+        mtext.value = "Hello\nWorld".to_string();
+        mtext.insertion_point = Vector3::new(10.0, 20.0, 0.0);
+        doc.add_entity(EntityType::MText(mtext));
+
+        let doc2 = roundtrip_binary(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::MText(ref m) = entities[0] {
+            // Newlines should have been converted to \P paragraph markers
+            assert!(m.value.contains("\\P"), "Expected \\P paragraph marker, got: {}", m.value);
+            assert!(!m.value.contains('\n'), "Literal newline should not survive roundtrip");
+        } else {
+            panic!("Expected MText entity");
+        }
+    }
+
+    #[test]
+    fn test_binary_dxf_roundtrip_circle() {
+        let mut doc = CadDocument::new();
+        let mut circle = crate::entities::circle::Circle::new();
+        circle.center = Vector3::new(5.0, 10.0, 0.0);
+        circle.radius = 3.5;
+        doc.add_entity(EntityType::Circle(circle));
+
+        let doc2 = roundtrip_binary(doc);
+        let entities: Vec<_> = doc2.entities().collect();
+        assert_eq!(entities.len(), 1);
+        if let EntityType::Circle(ref c) = entities[0] {
+            assert!((c.center.x - 5.0).abs() < 1e-9);
+            assert!((c.center.y - 10.0).abs() < 1e-9);
+            assert!((c.radius - 3.5).abs() < 1e-9);
+        } else {
+            panic!("Expected Circle entity");
+        }
+    }
 }
