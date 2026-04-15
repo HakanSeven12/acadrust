@@ -1002,11 +1002,15 @@ fn deep_insert(orig: &CadDocument, rt: &CadDocument) {
     let mut name_losses = 0usize;
     let mut point_losses = 0usize;
 
+    let mut changed_names: Vec<(String, String)> = Vec::new();
     for i in 0..count {
         let o = &orig_inserts[i];
         let r = &rt_inserts[i];
 
-        if o.block_name != r.block_name { name_losses += 1; }
+        if o.block_name != r.block_name {
+            name_losses += 1;
+            changed_names.push((o.block_name.clone(), r.block_name.clone()));
+        }
         if o.insert_point != r.insert_point { point_losses += 1; }
         if o.attributes.len() != r.attributes.len() { attr_losses += 1; }
     }
@@ -1018,7 +1022,12 @@ fn deep_insert(orig: &CadDocument, rt: &CadDocument) {
     if name_losses == 0 && point_losses == 0 && attr_losses == 0 {
         println!("    All Insert block_name, insert_point, and attribute counts preserved.");
     } else {
-        if name_losses > 0 { println!("    block_name changed: {} inserts", name_losses); }
+        if name_losses > 0 {
+            println!("    block_name changed: {} inserts", name_losses);
+            for (orig, rt) in changed_names.iter().take(10) {
+                println!("      {:?} -> {:?}", orig, rt);
+            }
+        }
         if point_losses > 0 { println!("    insert_point changed: {} inserts", point_losses); }
         if attr_losses > 0 { println!("    attribute count changed: {} inserts", attr_losses); }
     }

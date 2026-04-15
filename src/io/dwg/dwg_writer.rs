@@ -174,34 +174,36 @@ fn prepare_header(
     }
 
     // ── Sync child dictionary handles from root dict entries ──
-    if let Some(crate::objects::ObjectType::Dictionary(root_dict)) =
-        document.objects.get(&h.named_objects_dict_handle)
-    {
-        if let Some(handle) = root_dict.get("ACAD_GROUP") {
-            h.acad_group_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_MLINESTYLE") {
-            h.acad_mlinestyle_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_LAYOUT") {
-            h.acad_layout_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_PLOTSETTINGS") {
-            h.acad_plotsettings_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_PLOTSTYLENAME") {
-            h.acad_plotstylename_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_MATERIAL") {
-            h.acad_material_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_COLOR") {
-            h.acad_color_dict_handle = handle;
-        }
-        if let Some(handle) = root_dict.get("ACAD_VISUALSTYLE") {
-            h.acad_visualstyle_dict_handle = handle;
-        }
-    }
+    // Always overwrite — reader may produce garbage handles.
+    // If root dict doesn't have an entry, set handle to NULL.
+    let root_dict_entries = match document.objects.get(&h.named_objects_dict_handle) {
+        Some(crate::objects::ObjectType::Dictionary(root_dict)) => Some(root_dict),
+        _ => None,
+    };
+    h.acad_group_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_GROUP"))
+        .unwrap_or(Handle::NULL);
+    h.acad_mlinestyle_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_MLINESTYLE"))
+        .unwrap_or(Handle::NULL);
+    h.acad_layout_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_LAYOUT"))
+        .unwrap_or(Handle::NULL);
+    h.acad_plotsettings_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_PLOTSETTINGS"))
+        .unwrap_or(Handle::NULL);
+    h.acad_plotstylename_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_PLOTSTYLENAME"))
+        .unwrap_or(Handle::NULL);
+    h.acad_material_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_MATERIAL"))
+        .unwrap_or(Handle::NULL);
+    h.acad_color_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_COLOR"))
+        .unwrap_or(Handle::NULL);
+    h.acad_visualstyle_dict_handle = root_dict_entries
+        .and_then(|d| d.get("ACAD_VISUALSTYLE"))
+        .unwrap_or(Handle::NULL);
 
     // ── Sync linetype handles by name ──
     if let Some(lt) = document.line_types.get("ByLayer") {
@@ -233,28 +235,94 @@ fn prepare_header(
             }
         }
     }
-    if h.current_text_style_handle.is_null() {
-        if let Some(style) = document.text_styles.get("Standard") {
-            h.current_text_style_handle = style.handle;
+
+    // The header reader can produce garbage (multi-byte) handle values
+    // when the bit stream is misaligned.  Unconditionally sync every
+    // "current style" handle so that garbage values are overwritten
+    // with valid handles from the document model.
+    {
+        let text_valid = !h.current_text_style_handle.is_null()
+            && document.text_styles.iter().any(|s| s.handle == h.current_text_style_handle);
+        if !text_valid {
+            h.current_text_style_handle = document
+                .text_styles
+                .get("Standard")
+                .map(|s| s.handle)
+                .unwrap_or(Handle::NULL);
         }
     }
-    if h.current_dimstyle_handle.is_null() {
-        if let Some(ds) = document.dim_styles.get("Standard") {
-            h.current_dimstyle_handle = ds.handle;
+    {
+        let ds_valid = !h.current_dimstyle_handle.is_null()
+            && document.dim_styles.iter().any(|ds| ds.handle == h.current_dimstyle_handle);
+        if !ds_valid {
+            h.current_dimstyle_handle = document
+                .dim_styles
+                .get("Standard")
+                .map(|ds| ds.handle)
+                .unwrap_or(Handle::NULL);
         }
     }
-    if h.current_linetype_handle.is_null() {
-        h.current_linetype_handle = h.bylayer_linetype_handle;
+    {
+        let lt_valid = !h.current_linetype_handle.is_null()
+            && document.line_types.iter().any(|lt| lt.handle == h.current_linetype_handle);
+        if !lt_valid {
+            h.current_linetype_handle = h.bylayer_linetype_handle;
+        }
     }
-    if h.current_multiline_style_handle.is_null() {
-        // Find MLineStyle "Standard" in the objects map
-        for (_, obj) in &document.objects {
-            if let crate::objects::ObjectType::MLineStyle(mls) = obj {
-                if mls.name == "Standard" {
-                    h.current_multiline_style_handle = mls.handle;
-                    break;
+    {
+        let mls_valid = !h.current_multiline_style_handle.is_null()
+            && document.objects.iter().any(|(_, obj)| {
+                if let crate::objects::ObjectType::MLineStyle(mls) = obj {
+                    mls.handle == h.current_multiline_style_handle
+                } else {
+                    false
+                }
+            });
+        if !mls_valid {
+            h.current_multiline_style_handle = Handle::NULL;
+            for (_, obj) in &document.objects {
+                if let crate::objects::ObjectType::MLineStyle(mls) = obj {
+                    if mls.name == "Standard" {
+                        h.current_multiline_style_handle = mls.handle;
+                        break;
+                    }
                 }
             }
+        }
+    }
+
+    // R2007+: current_material_handle — validate against objects
+    {
+        let mat_valid = !h.current_material_handle.is_null()
+            && document.objects.contains_key(&h.current_material_handle);
+        if !mat_valid {
+            h.current_material_handle = Handle::NULL;
+        }
+    }
+
+    // dim_text_style_handle — validate against text styles
+    {
+        let dts_valid = !h.dim_text_style_handle.is_null()
+            && document.text_styles.iter().any(|s| s.handle == h.dim_text_style_handle);
+        if !dts_valid {
+            h.dim_text_style_handle = document
+                .text_styles
+                .get("Standard")
+                .map(|s| s.handle)
+                .unwrap_or(Handle::NULL);
+        }
+    }
+
+    // UCS ortho ref handles — validate against UCS table
+    {
+        let ucs_valid = |handle: Handle| -> bool {
+            handle.is_null() || document.ucss.iter().any(|u| u.handle == handle)
+        };
+        if !ucs_valid(h.paper_ucs_ortho_ref) {
+            h.paper_ucs_ortho_ref = Handle::NULL;
+        }
+        if !ucs_valid(h.ucs_ortho_ref) {
+            h.ucs_ortho_ref = Handle::NULL;
         }
     }
 

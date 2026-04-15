@@ -329,18 +329,24 @@ impl<'a> DwgObjectWriter<'a> {
                 .write_handle(DwgReferenceType::SoftPointer, r.value());
         }
 
+        // Filter entity xdic handle: only keep it if the referenced
+        // dictionary object actually exists in document.objects, otherwise
+        // BricsCAD reports "Object was erased" for the dangling reference.
+        let effective_entity_xdic = xdictionary_handle
+            .filter(|xdic| !xdic.is_null() && self.document.objects.contains_key(xdic));
+
         // R2004+: no-xdic flag (MAIN) + conditional xdic handle (HANDLE)
         // Pre-R2004: always write xdic handle (0 if none)
         if self.version.r2004_plus() {
-            self.writer.write_bit(xdictionary_handle.is_none());
+            self.writer.write_bit(effective_entity_xdic.is_none());
             // Xdic handle (HANDLE) — only if present
-            if let Some(xdic) = xdictionary_handle {
+            if let Some(xdic) = effective_entity_xdic {
                 self.writer
                     .write_handle(DwgReferenceType::HardOwnership, xdic.value());
             }
         } else {
             // Pre-R2004: always write xdic handle (0 if none)
-            let xdic_val = xdictionary_handle
+            let xdic_val = effective_entity_xdic
                 .map(|h| h.value())
                 .unwrap_or(0);
             self.writer
@@ -348,9 +354,9 @@ impl<'a> DwgObjectWriter<'a> {
         }
 
         // Enqueue extension dictionary so its object is written later
-        if let Some(xdic) = xdictionary_handle {
+        if let Some(xdic) = effective_entity_xdic {
             if !xdic.is_null() {
-                self.object_queue.push_back(*xdic);
+                self.object_queue.push_back(xdic);
             }
         }
 
