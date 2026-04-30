@@ -159,7 +159,7 @@ pub use tables::{
 pub use document::CadDocument;
 
 // Re-export I/O types
-pub use io::dxf::{DxfReader, DxfWriter};
+pub use io::dxf::{DxfReader, DxfReaderConfiguration, DxfWriter};
 pub use io::dwg::{DwgReader, DwgReadOptions, DwgWriter};
 
 // Re-export ACIS types
@@ -195,5 +195,3 @@ mod tests {
         assert_eq!(doc2.version, DxfVersion::AC1015);
     }
 }
-
-

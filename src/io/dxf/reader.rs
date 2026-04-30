@@ -26,11 +26,20 @@ pub struct DxfReaderConfiguration {
     ///
     /// Default: `false` (strict mode — errors propagate).
     pub failsafe: bool,
+
+    /// Default encoding to use for non-UTF8 strings if the DXF file does not
+    /// specify it via $DWGCODEPAGE.
+    ///
+    /// Only applies to DXF versions prior to AC1021 (AutoCAD 2007).
+    pub default_encoding: Option<String>,
 }
 
 impl Default for DxfReaderConfiguration {
     fn default() -> Self {
-        Self { failsafe: false }
+        Self {
+            failsafe: false,
+            default_encoding: None,
+        }
     }
 }
 
@@ -127,6 +136,13 @@ impl DxfReader {
 
     /// Read a DXF file and return a CadDocument
     pub fn read(mut self) -> Result<CadDocument> {
+        // Set default encoding if provided
+        if let Some(ref encoding_name) = self.config.default_encoding {
+            if let Some(enc) = crate::io::dxf::code_page::encoding_from_code_page(encoding_name) {
+                self.reader.set_encoding(enc);
+            }
+        }
+
         // Create document with pre-allocated entity storage
         let mut document = CadDocument::new();
         document.entities.reserve(self.estimated_entities);
@@ -233,5 +249,3 @@ impl DxfReader {
         Ok(())
     }
 }
-
-

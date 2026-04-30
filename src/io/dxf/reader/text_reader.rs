@@ -58,9 +58,14 @@ impl<R: Read + Seek> DxfTextReader<R> {
             Err(e) => {
                 let bytes = e.into_bytes();
                 let result = if let Some(enc) = self.encoding {
-                    let (decoded, _, _) = enc.decode(&bytes);
+                    let (decoded, _, malformed) = enc.decode(&bytes);
+                    if malformed {
+                        // If we had a specific encoding but it's malformed, we might want to know.
+                        // However, DXF sometimes has junk. For now, we still return what we can.
+                    }
                     decoded.into_owned()
                 } else {
+                    // Fallback to Latin-1
                     bytes.iter().map(|&b| b as char).collect()
                 };
                 self.line_buf = bytes; // reclaim Vec allocation
@@ -236,5 +241,3 @@ mod tests {
         assert_eq!(pair.value_string, "Line1\nLine2\rLine3");
     }
 }
-
-
