@@ -683,7 +683,11 @@ impl<R: Read + Seek> DwgReader<R> {
             if page_number > 0 && page_size > 0 {
                 info.page_records.insert(page_number, (file_offset, page_size as i64));
             }
-            file_offset += page_size as i64;
+            // Only advance for positive sizes; negative/zero sizes in gap entries are
+            // invalid and must not corrupt subsequent page offsets.
+            if page_size > 0 {
+                file_offset += page_size as i64;
+            }
         }
 
         self.notifications.notify(
