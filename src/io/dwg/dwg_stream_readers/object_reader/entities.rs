@@ -345,23 +345,30 @@ pub fn read_face3d(reader: &mut DwgMergedReader, version: DwgVersion) -> Face3DD
         Face3DData { first_corner, second_corner, third_corner, fourth_corner, invisible_edges }
     } else {
         let has_no_flags = reader.read_bit();
-        let z_are_same = reader.read_bit();
+        // ODA spec "Z is zero" — corner1's Z is omitted from the stream
+        // (treated as 0.0) when set. Corners 2–4 always encode their Z as
+        // BD-with-default (with the previous corner's Z as the default),
+        // independent of this flag. Skipping those reads on the later
+        // corners desynchronises the bit cursor: corner-3 Y and corner-4
+        // X then collapse to defaults, and the quad reads as a degenerate
+        // edge along the corner-1 Y line.
+        let z_is_zero = reader.read_bit();
 
         let x1 = reader.read_raw_double();
         let y1 = reader.read_raw_double();
-        let z1 = if !z_are_same { reader.read_raw_double() } else { 0.0 };
+        let z1 = if !z_is_zero { reader.read_raw_double() } else { 0.0 };
 
         let x2 = reader.read_bit_double_with_default(x1);
         let y2 = reader.read_bit_double_with_default(y1);
-        let z2 = if !z_are_same { reader.read_bit_double_with_default(z1) } else { z1 };
+        let z2 = reader.read_bit_double_with_default(z1);
 
         let x3 = reader.read_bit_double_with_default(x2);
         let y3 = reader.read_bit_double_with_default(y2);
-        let z3 = if !z_are_same { reader.read_bit_double_with_default(z2) } else { z1 };
+        let z3 = reader.read_bit_double_with_default(z2);
 
         let x4 = reader.read_bit_double_with_default(x3);
         let y4 = reader.read_bit_double_with_default(y3);
-        let z4 = if !z_are_same { reader.read_bit_double_with_default(z3) } else { z1 };
+        let z4 = reader.read_bit_double_with_default(z3);
 
         let invisible_edges = if !has_no_flags { reader.read_bit_short() } else { 0 };
 
