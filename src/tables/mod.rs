@@ -110,6 +110,30 @@ impl<T: TableEntry> Table<T> {
         self.entries.insert(name, entry);
     }
 
+    /// Add an entry while preserving existing entries with the same display
+    /// name. This is needed for AutoCAD VPORT tables, where tiled model-space
+    /// viewports can all be named "*Active".
+    pub fn add_allow_duplicate(&mut self, entry: T) {
+        let name = entry.name().to_uppercase();
+        if !self.entries.contains_key(&name) {
+            self.entries.insert(name, entry);
+            return;
+        }
+
+        let handle = entry.handle();
+        let mut key = if handle.is_valid() {
+            format!("{}\u{0}{:X}", name, handle.value())
+        } else {
+            format!("{}\u{0}{}", name, self.entries.len())
+        };
+        let mut n = 1usize;
+        while self.entries.contains_key(&key) {
+            key = format!("{}\u{0}{}-{}", name, handle.value(), n);
+            n += 1;
+        }
+        self.entries.insert(key, entry);
+    }
+
     /// Get an entry by name (case-insensitive)
     pub fn get(&self, name: &str) -> Option<&T> {
         self.entries.get(&name.to_uppercase())
@@ -227,6 +251,26 @@ mod tests {
     }
 
     #[test]
+    fn test_table_allow_duplicate_entries() {
+        let mut table = Table::new();
+        let entry1 = MockEntry {
+            handle: Handle::new(1),
+            name: "*Active".to_string(),
+        };
+        let entry2 = MockEntry {
+            handle: Handle::new(2),
+            name: "*Active".to_string(),
+        };
+
+        table.add_allow_duplicate(entry1);
+        table.add_allow_duplicate(entry2);
+
+        assert_eq!(table.len(), 2);
+        assert_eq!(table.names().collect::<Vec<_>>(), vec!["*Active", "*Active"]);
+        assert_eq!(table.get("*active").unwrap().handle(), Handle::new(1));
+    }
+
+    #[test]
     fn test_table_remove() {
         let mut table = Table::new();
         let entry = MockEntry {
@@ -242,5 +286,3 @@ mod tests {
         assert_eq!(table.len(), 0);
     }
 }
-
-

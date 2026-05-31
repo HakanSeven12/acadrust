@@ -2088,6 +2088,7 @@ impl<'a> SectionReader<'a> {
 
     /// Read VPORT table
     fn read_vport_table(&mut self, document: &mut CadDocument) -> Result<()> {
+        document.vports.clear();
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDTAB" {
                 break;
@@ -2095,7 +2096,7 @@ impl<'a> SectionReader<'a> {
 
             if pair.code == 0 && pair.value_string == "VPORT" {
                 if let Some(vport) = self.read_vport_entry()? {
-                    document.vports.add_or_replace(vport);
+                    document.vports.add_allow_duplicate(vport);
                 }
             }
         }

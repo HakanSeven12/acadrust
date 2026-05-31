@@ -415,6 +415,7 @@ impl DwgDocumentBuilder {
         let _ = document.block_records.remove("*Model_Space");
         let _ = document.block_records.remove("*Paper_Space");
 
+        let mut cleared_default_vports = false;
         for entry in &parsed_entries {
             match entry {
                 ParsedEntry::Layer(h, data) => {
@@ -636,6 +637,10 @@ impl DwgDocumentBuilder {
                     let _ = document.ucss.add(ucs);
                 },
                 ParsedEntry::VPort(h, data) => {
+                    if !cleared_default_vports {
+                        document.vports.clear();
+                        cleared_default_vports = true;
+                    }
                     let mut vp = crate::tables::VPort::new(&data.name);
                     vp.handle = Handle::from(*h);
                     vp.lower_left = data.lower_left;
@@ -664,8 +669,7 @@ impl DwgDocumentBuilder {
                     vp.snap_style = data.snap_style;
                     vp.snap_isopair = data.snap_isopair;
                     vp.snap_rotation = data.snap_rotation;
-                    let _ = document.vports.remove(&data.name);
-                    let _ = document.vports.add(vp);
+                    document.vports.add_allow_duplicate(vp);
                 },
                 ParsedEntry::AppId(h, data) => {
                     let mut app = crate::tables::AppId::new(&data.name);
