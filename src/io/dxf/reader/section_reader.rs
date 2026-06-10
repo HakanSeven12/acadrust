@@ -300,6 +300,8 @@ impl<'a> SectionReader<'a> {
                 "$TEXTSTYLE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_text_style_name = p.value_string.clone(); } }
                 "$DIMSTYLE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_dimstyle_name = p.value_string.clone(); } }
                 "$CMLSTYLE" => { if let Some(p) = self.reader.read_pair()? { hdr.multiline_style = p.value_string.clone(); } }
+                "$CTABLESTYLE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_table_style_name = p.value_string.clone(); } }
+                "$CMLEADERSTYLE" => { if let Some(p) = self.reader.read_pair()? { hdr.current_mleader_style_name = p.value_string.clone(); } }
 
                 // ── Extents / Limits (multi-value XYZ / XY) ──
                 "$INSBASE" => { self.read_header_point3(&mut hdr.model_space_insertion_base)?; }

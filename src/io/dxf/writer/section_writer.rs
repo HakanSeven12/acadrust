@@ -166,7 +166,8 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.write_header_variable("$TRACEWID", |w| w.write_double(40, hdr.trace_width))?;
         self.write_header_variable("$TEXTSTYLE", |w| w.write_string(7, &hdr.current_text_style_name))?;
         self.write_header_variable("$CMLSTYLE", |w| w.write_string(2, &hdr.multiline_style))?;
-        self.write_header_variable("$CTABLESTYLE", |w| w.write_string(2, "Standard"))?;
+        self.write_header_variable("$CTABLESTYLE", |w| w.write_string(2, &hdr.current_table_style_name))?;
+        self.write_header_variable("$CMLEADERSTYLE", |w| w.write_string(2, &hdr.current_mleader_style_name))?;
         self.write_header_variable("$CLAYER", |w| w.write_string(8, &hdr.current_layer_name))?;
         self.write_header_variable("$CELTYPE", |w| w.write_string(6, &hdr.current_linetype_name))?;
         self.write_header_variable("$CECOLOR", |w| w.write_i16(62, hdr.current_entity_color.approximate_index()))?;

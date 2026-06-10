@@ -573,6 +573,10 @@ pub struct HeaderVariables {
     pub current_text_style_name: String,
     /// DIMSTYLE - Current dimension style name
     pub current_dimstyle_name: String,
+    /// CTABLESTYLE - Current table style name
+    pub current_table_style_name: String,
+    /// CMLEADERSTYLE - Current multileader style name
+    pub current_mleader_style_name: String,
 }
 
 impl Default for HeaderVariables {
@@ -861,6 +865,8 @@ impl Default for HeaderVariables {
             current_layer_name: String::from("0"),
             current_text_style_name: String::from("Standard"),
             current_dimstyle_name: String::from("Standard"),
+            current_table_style_name: String::from("Standard"),
+            current_mleader_style_name: String::from("Standard"),
         }
     }
 }
