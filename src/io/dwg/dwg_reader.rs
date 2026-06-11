@@ -172,6 +172,18 @@ impl DwgReadOptions {
     }
 }
 
+/// Decode a section name from a fixed 64-byte, null-terminated field.
+///
+/// The name ends at the first null byte. Some writers leave non-zero garbage
+/// in the bytes *after* the terminator instead of zero-padding the field, so
+/// trimming trailing nulls is not enough — it would keep the embedded null and
+/// the junk that follows (e.g. `"AcDb:Handles\0t…"`), and the name would then
+/// fail to match when looking the section up.
+fn section_name_from_field(name_buf: &[u8; 64]) -> String {
+    let end = name_buf.iter().position(|&b| b == 0).unwrap_or(name_buf.len());
+    String::from_utf8_lossy(&name_buf[..end]).into_owned()
+}
+
 /// DWG file reader with CRC-64 extraction support.
 ///
 /// Reads DWG binary files and provides access to all internal
@@ -768,12 +780,14 @@ impl<R: Read + Seek> DwgReader<R> {
             let _section_id = cursor.read_i32::<LittleEndian>()?;
             let encrypted = cursor.read_i32::<LittleEndian>()?;
 
-            // Section name (64 bytes, zero-padded)
+            // Section name (64-byte field, null-terminated). Some writers leave
+            // non-zero garbage in the bytes *after* the terminator instead of
+            // zero-padding, so cut at the first null rather than trimming
+            // trailing nulls — otherwise the embedded null plus trailing junk
+            // survives and the name fails to match (e.g. "AcDb:Handles\0t…").
             let mut name_buf = [0u8; 64];
             cursor.read_exact(&mut name_buf)?;
-            let name = String::from_utf8_lossy(&name_buf)
-                .trim_end_matches('\0')
-                .to_string();
+            let name = section_name_from_field(&name_buf);
 
             // Per-page entries: pageNumber(4), compressedSize(4), offset(8)
             let mut pages = Vec::new();
@@ -1614,5 +1628,37 @@ impl std::fmt::Display for CrcExtractionReport {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod section_name_tests {
+    use super::section_name_from_field;
+
+    fn field(prefix: &[u8]) -> [u8; 64] {
+        let mut b = [0u8; 64];
+        b[..prefix.len()].copy_from_slice(prefix);
+        b
+    }
+
+    #[test]
+    fn clean_zero_padded_name() {
+        assert_eq!(section_name_from_field(&field(b"AcDb:Handles")), "AcDb:Handles");
+    }
+
+    #[test]
+    fn stops_at_first_null_ignoring_trailing_garbage() {
+        // Terminator at index 12, then non-zero junk — the real-world case that
+        // broke `trim_end_matches('\0')`.
+        let mut b = field(b"AcDb:Handles");
+        b[13] = b't';
+        b[14] = 0x01;
+        b[20] = b'X';
+        assert_eq!(section_name_from_field(&b), "AcDb:Handles");
+    }
+
+    #[test]
+    fn empty_when_first_byte_null() {
+        assert_eq!(section_name_from_field(&[0u8; 64]), "");
     }
 }
