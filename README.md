@@ -6,7 +6,7 @@
 
 **A pure Rust library for reading and writing CAD files (DXF and DWG).**
 
-Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp). Supports DXF (ASCII & Binary) and DWG (R13–R2018).
+Supports DXF (ASCII & Binary) and DWG (R13–R2018) files.
 
 ## Quick Start
 
@@ -254,6 +254,10 @@ Full API docs: [docs.rs/acadrust](https://docs.rs/acadrust)
 - Unknown entity preservation
 
 ---
+
+
+## Used By
+-[Open CAD Studio](https://github.com/HakanSeven12/OpenCADStudio) An open-source (GPLv3) CAD application that uses acadrust as its core native DWG/DXF engine for read/write operations and 3D modeling.
 
 ## License
 
