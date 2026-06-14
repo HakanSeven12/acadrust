@@ -12,7 +12,7 @@ Inspired by [ACadSharp](https://github.com/DomCR/ACadSharp). Supports DXF (ASCII
 
 ```toml
 [dependencies]
-acadrust = "0.3.4"
+acadrust = "0.4.0"
 ```
 
 ```rust
@@ -144,6 +144,25 @@ Full API docs: [docs.rs/acadrust](https://docs.rs/acadrust)
 ---
 
 ## Changelog
+
+
+### 0.4.0
+
+- **Annotative styles** — `TextStyle`, `DimStyle`, and `TableStyle` now carry an `annotative` flag, persisted the standard way via `AcadAnnotative` XDATA/EED in both DXF and DWG.
+
+- **AcDbGeoData decode** — DWG reader now decodes the `AcDbGeoData` coordinate-system definition.
+
+- **CANNOSCALE header vars** — Read/write support for the `CANNOSCALE` and `CANNOSCALEVALUE` header variables in DXF.
+
+- **VPORT visual style** — Render mode / visual style is persisted through both DXF and DWG; duplicate and tiled `*Active` VPORT entries are preserved instead of being collapsed.
+
+- **Layout paper dimensions** — Paper size and plot rotation are exposed on `Layout`.
+
+- **DWG reader robustness** — Hatch boundary-handle counts capped with `safe_count`; raster-image / wipeout clip-boundary vertices retained; 3DFACE corners 2–4 always decode Z with BD-default; invalid page offsets from gap entries no longer computed.
+
+- **DXF reader fixes** — Improved 3D-point header parsing, null entity-handle allocation, BlockRecord initialization ordering, and configurable default encoding. Mirrored explode now produces correct arc/ellipse handedness and OCS centers.
+
+- **DWG roundtrip** — Roundtrip workflows across supported versions with newline sanitization and improved reader alignment handling.
 
 
 ### 0.3.4
