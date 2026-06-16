@@ -99,6 +99,11 @@ pub struct DwgObjectWriter<'a> {
     /// Owner handle overrides for extension dictionaries whose parent entity
     /// was re-allocated (e.g. ATTRIB children of INSERT).
     pub(super) owner_overrides: std::collections::HashMap<Handle, Handle>,
+    /// Pre-allocated handles for table entries that have Handle::NULL in the
+    /// document (e.g. user-created linetypes). Keyed by linetype name (uppercase).
+    /// Populated before writing any table controls so controls and records agree.
+    #[allow(dead_code)]
+    pub(super) linetype_handles: std::collections::HashMap<String, Handle>,
 }
 
 impl<'a> DwgObjectWriter<'a> {
@@ -185,6 +190,7 @@ impl<'a> DwgObjectWriter<'a> {
             sab_entries: Vec::new(),
             visited_objects: HashSet::new(),
             owner_overrides: std::collections::HashMap::new(),
+            linetype_handles: std::collections::HashMap::new(),
         })
     }
 
@@ -682,19 +688,75 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_byte(ltype.elements.len() as u8);
 
         for seg in &ltype.elements {
+            let c = seg.complex.as_ref();
             self.writer.write_bit_double(seg.length);
-            self.writer.write_bit_short(0); // shape number
-            self.writer.write_raw_double(0.0); // offset x
-            self.writer.write_raw_double(0.0); // offset y
-            self.writer.write_bit_double(1.0); // scale
-            self.writer.write_bit_double(0.0); // rotation
-            self.writer.write_bit_short(0); // shape flags
+            // Shape number: for DWG text elements, this is a byte offset into
+            // the text area; for shape elements, the shape number itself.
+            let shape_num = if let Some(ref cx) = c {
+                if cx.is_text() {
+                    // Text elements use byte offset; 0 is safe default
+                    0i16
+                } else {
+                    cx.shape_number().unwrap_or(0)
+                }
+            } else {
+                0
+            };
+            self.writer.write_bit_short(shape_num);
+            self.writer.write_raw_double(c.map_or(0.0, |cx| cx.offset[0])); // offset x
+            self.writer.write_raw_double(c.map_or(0.0, |cx| cx.offset[1])); // offset y
+            self.writer.write_bit_double(c.map_or(1.0, |cx| cx.scale)); // scale
+            self.writer.write_bit_double(c.map_or(0.0, |cx| cx.rotation)); // rotation
+            // Build DWG flags: 0x01=abs rot, 0x02=shape, 0x04=text
+            let flags = if let Some(ref cx) = c {
+                let mut f: i16 = 0;
+                if cx.is_absolute_rotation() { f |= 0x01; }
+                if cx.is_shape() { f |= 0x02; }
+                if cx.is_text() { f |= 0x04; }
+                f
+            } else {
+                0
+            };
+            self.writer.write_bit_short(flags); // shape flags
         }
 
-        // R2004 and earlier: 256-byte text area
+        // Text area: R2004 and earlier always have 256 bytes; R2007+ only if complex
+        let has_complex = ltype.elements.iter().any(|s| s.complex.is_some());
         if !self.version.r2007_plus() {
-            for _ in 0..256 {
-                self.writer.write_byte(0);
+            // R2004 and earlier: unconditional 256-byte text area
+            let mut text_area = [0u8; 256];
+            if has_complex {
+                for seg in &ltype.elements {
+                    if let Some(ref cx) = seg.complex {
+                        if let Some(t) = cx.text() {
+                            if !t.is_empty() {
+                                let bytes = t.as_bytes();
+                                let copy_len = bytes.len().min(255);
+                                text_area[..copy_len].copy_from_slice(&bytes[..copy_len]);
+                            }
+                        }
+                    }
+                }
+            }
+            for &b in &text_area {
+                self.writer.write_byte(b);
+            }
+        } else if has_complex {
+            // R2007+: 512-byte text area only if complex elements exist
+            let mut text_area = [0u8; 512];
+            for seg in &ltype.elements {
+                if let Some(ref cx) = seg.complex {
+                    if let Some(t) = cx.text() {
+                        if !t.is_empty() {
+                            let bytes = t.as_bytes();
+                            let copy_len = bytes.len().min(511);
+                            text_area[..copy_len].copy_from_slice(&bytes[..copy_len]);
+                        }
+                    }
+                }
+            }
+            for &b in &text_area {
+                self.writer.write_byte(b);
             }
         }
 
@@ -703,9 +765,10 @@ impl<'a> DwgObjectWriter<'a> {
             .write_handle(DwgReferenceType::HardPointer, 0);
 
         // Shape file handles for each segment
-        for _seg in &ltype.elements {
+        for seg in &ltype.elements {
+            let sh = seg.complex.as_ref().map_or(0, |cx| cx.style_handle.value());
             self.writer
-                .write_handle(DwgReferenceType::HardPointer, 0);
+                .write_handle(DwgReferenceType::HardPointer, sh);
         }
 
         self.register_object(ltype.handle);

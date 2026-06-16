@@ -28,7 +28,7 @@ pub mod vport;
 pub mod ucs;
 
 pub use layer::{Layer, LayerFlags};
-pub use linetype::{LineType, LineTypeElement};
+pub use linetype::{LineType, LineTypeComplexData, LineTypeComplexContent, LineTypeElement};
 pub use textstyle::{TextStyle, TextGenerationFlags};
 pub use block_record::BlockRecord;
 pub use dimstyle::DimStyle;

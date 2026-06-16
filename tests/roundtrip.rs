@@ -21,6 +21,7 @@ use acadrust::entities::mesh::Mesh;
 use acadrust::entities::mline::MLine;
 use acadrust::entities::multileader::MultiLeader;
 use acadrust::entities::polyface_mesh::PolyfaceMesh;
+use acadrust::tables::{LineType, LineTypeComplexContent, LineTypeElement};
 use acadrust::types::{Color, DxfVersion, Handle, Vector2, Vector3};
 use acadrust::{CadDocument, DwgReader, DwgWriter, DxfReader, DxfWriter};
 
@@ -611,6 +612,9 @@ fn normalize_entity_common(common: &mut acadrust::entities::EntityCommon) {
     common.owner_handle = Handle::NULL;
     common.reactors.clear();
     common.xdictionary_handle = None;
+    // entity_mode is DWG-internal and not set for programmatic documents;
+    // normalize to None to avoid false differences in DWG roundtrip tests.
+    common.entity_mode = None;
 }
 
 /// Comprehensive normalization for roundtrip comparison.
@@ -2237,4 +2241,100 @@ fn dwg_roundtrip_annotative_styles() {
         "DWG: dim style annotative lost"
     );
     assert!(mleader_is_annotative(&rt), "DWG: mleader style annotative lost");
+}
+
+#[test]
+fn dxf_roundtrip_complex_linetype_shape() {
+    use acadrust::tables::LineTypeComplexData;
+    let mut doc = build_minimal_document(DxfVersion::AC1032, EntityType::Point(Point::new()));
+
+    let mut lt = LineType::new("SHAPELT");
+    let mut dash = LineTypeElement::dash(5.0);
+    dash.complex = Some(LineTypeComplexData {
+        content: LineTypeComplexContent::Shape { shape_number: 42 },
+        style_handle: Handle::new(0x80),
+        scale: 2.0,
+        rotation: 30.0,
+        absolute_rotation: false,
+        offset: [1.0, 0.5],
+    });
+    let mut space = LineTypeElement::space(2.0);
+    space.complex = Some(LineTypeComplexData::default());
+    lt.elements.push(dash);
+    lt.elements.push(space);
+    lt.pattern_length = 7.0;
+
+    doc.line_types.add(lt).ok();
+
+    let rt = dxf_roundtrip(doc);
+    let rt_lt = rt.line_types.get("SHAPELT").expect("linetype lost");
+    assert!(rt_lt.is_complex());
+    assert_eq!(rt_lt.elements.len(), 2);
+    let c0 = rt_lt.elements[0].complex.as_ref().expect("complex lost");
+    assert!(c0.is_shape());
+    assert_eq!(c0.shape_number(), Some(42));
+    assert!((c0.scale - 2.0).abs() < 1e-6);
+    assert!((c0.rotation - 30.0).abs() < 1e-6);
+    assert!(!c0.is_absolute_rotation());
+}
+
+#[test]
+fn dxf_roundtrip_complex_linetype_text() {
+    use acadrust::tables::LineTypeComplexData;
+    let mut doc = build_minimal_document(DxfVersion::AC1032, EntityType::Point(Point::new()));
+
+    let mut lt = LineType::new("TEXTLT");
+    let mut dash = LineTypeElement::dash(3.0);
+    dash.complex = Some(LineTypeComplexData {
+        content: LineTypeComplexContent::Text { text: "X".to_string() },
+        style_handle: Handle::new(0x80),
+        scale: 1.5,
+        rotation: 45.0,
+        absolute_rotation: true,
+        offset: [0.0, 0.25],
+    });
+    lt.elements.push(dash);
+    lt.pattern_length = 3.0;
+
+    doc.line_types.add(lt).ok();
+
+    let rt = dxf_roundtrip(doc);
+    let rt_lt = rt.line_types.get("TEXTLT").expect("linetype lost");
+    assert!(rt_lt.is_complex());
+    let c0 = rt_lt.elements[0].complex.as_ref().expect("complex lost");
+    assert!(c0.is_text());
+    assert_eq!(c0.text(), Some("X"));
+    assert!(c0.is_absolute_rotation());
+}
+
+#[test]
+fn dwg_roundtrip_complex_linetype_shape() {
+    use acadrust::tables::LineTypeComplexData;
+    let mut doc = build_minimal_document(DxfVersion::AC1032, EntityType::Point(Point::new()));
+
+    let mut lt = LineType::new("SHAPELT");
+    // Assign a valid handle so the DWG writer can reference it correctly.
+    // User-created linetypes with Handle::NULL may not survive DWG roundtrip
+    // without additional handle pre-allocation logic.
+    lt.handle = Handle::new(0xF0);
+    let mut dash = LineTypeElement::dash(4.0);
+    dash.complex = Some(LineTypeComplexData {
+        content: LineTypeComplexContent::Shape { shape_number: 10 },
+        style_handle: Handle::NULL,
+        scale: 1.0,
+        rotation: 0.0,
+        absolute_rotation: false,
+        offset: [0.0, 0.0],
+    });
+    lt.elements.push(dash);
+    lt.pattern_length = 4.0;
+
+    doc.line_types.add(lt).ok();
+
+    let rt = dwg_roundtrip(&doc);
+    let rt_lt = rt.line_types.get("SHAPELT").expect("linetype lost");
+    assert!(rt_lt.is_complex());
+    let c0 = rt_lt.elements[0].complex.as_ref().expect("complex lost");
+    assert!(c0.is_shape());
+    assert_eq!(c0.shape_number(), Some(10));
 }

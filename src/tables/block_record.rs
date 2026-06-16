@@ -1,7 +1,7 @@
 //! Block record table entry
 
 use super::TableEntry;
-use crate::types::Handle;
+use crate::types::{Handle, Vector3};
 
 /// Block record flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +72,8 @@ pub struct BlockRecord {
     pub preview_data: Vec<u8>,
     /// INSERT entity handles that reference this block (R2000+)
     pub insert_handles: Vec<Handle>,
+    /// Block insertion base point (read from BLOCK entity in DWG)
+    pub base_point: Vector3,
 }
 
 impl BlockRecord {
@@ -93,6 +95,7 @@ impl BlockRecord {
             insert_count_bytes: Vec::new(),
             preview_data: Vec::new(),
             insert_handles: Vec::new(),
+            base_point: Vector3::ZERO,
         }
     }
 
@@ -114,6 +117,7 @@ impl BlockRecord {
             insert_count_bytes: Vec::new(),
             preview_data: Vec::new(),
             insert_handles: Vec::new(),
+            base_point: Vector3::ZERO,
         }
     }
 
@@ -135,6 +139,7 @@ impl BlockRecord {
             insert_count_bytes: Vec::new(),
             preview_data: Vec::new(),
             insert_handles: Vec::new(),
+            base_point: Vector3::ZERO,
         }
     }
 
@@ -208,5 +213,3 @@ mod tests {
         assert!(!block.is_model_space());
     }
 }
-
-

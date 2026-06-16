@@ -1693,7 +1693,51 @@ impl<'a> SectionReader<'a> {
                 }
                 49 => {
                     if let Some(dash) = pair.as_double() {
-                        linetype.elements.push(LineTypeElement { length: dash });
+                        linetype.elements.push(LineTypeElement { length: dash, complex: None });
+                    }
+                }
+                9 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        last.complex_mut().set_text(pair.value_string.clone());
+                    }
+                }
+                44 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        if let Some(v) = pair.as_double() { last.complex_mut().offset[0] = v; }
+                    }
+                }
+                45 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        if let Some(v) = pair.as_double() { last.complex_mut().offset[1] = v; }
+                    }
+                }
+                46 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        last.complex_mut().scale = pair.value_string.parse().unwrap_or(1.0);
+                    }
+                }
+                50 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        last.complex_mut().rotation = pair.value_string.parse().unwrap_or(0.0);
+                    }
+                }
+                74 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        last.complex_mut().set_shape_number(pair.as_i16().unwrap_or(0));
+                    }
+                }
+                75 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        if let Some(flags) = pair.as_i16() {
+                            last.complex_mut().apply_dxf_flags(flags);
+                        }
+                    }
+                }
+                340 => {
+                    if let Some(last) = linetype.elements.last_mut() {
+                        if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
+                            last.complex_mut().style_handle = Handle::new(h);
+                        }
                     }
                 }
                 _ => {}

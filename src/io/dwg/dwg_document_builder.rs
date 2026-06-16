@@ -465,6 +465,7 @@ impl DwgDocumentBuilder {
                     br.insert_count_bytes = data.insert_count_bytes.clone();
                     br.preview_data = data.preview_data.clone();
                     br.insert_handles = data.insert_handles.iter().map(|&h| Handle::from(h)).collect();
+                    br.base_point = data.base_point;
                     if let Some(layout_h) = data.layout_handle {
                         br.layout = Handle::from(layout_h);
                     }
@@ -494,8 +495,14 @@ impl DwgDocumentBuilder {
                     style.flags.upside_down = (data.generation & 4) != 0;
                     // Only mark xref-dependent if the xref block record handle is valid
                     style.xref_dependent = data.xref_dependent && data.xref_handle != 0;
-                    let _ = document.text_styles.remove(&data.name);
-                    let _ = document.text_styles.add(style);
+                    // Use add_allow_duplicate for shape-file-only styles (empty name)
+                    // so multiple empty-named styles are preserved. Named styles use
+                    // add_or_replace to avoid duplicates (e.g. "Standard").
+                    if data.name.is_empty() {
+                        document.text_styles.add_allow_duplicate(style);
+                    } else {
+                        document.text_styles.add_or_replace(style);
+                    }
                 },
                 ParsedEntry::Ltype(h, data) => {
                     let mut lt = crate::tables::LineType::new(&data.name);
@@ -503,9 +510,39 @@ impl DwgDocumentBuilder {
                     lt.description = data.description.clone();
                     lt.pattern_length = data.pattern_length;
                     lt.xref_dependent = data.xref_dependent;
-                    lt.elements = data.segments.iter().map(|s| {
-                        crate::tables::LineTypeElement { length: s.length }
-                    }).collect();
+                    lt.elements = data
+                        .segments
+                        .iter()
+                        .zip(data.shape_handles.iter().chain(std::iter::repeat(&0u64)))
+                        .map(|(s, &sh)| {
+                            use crate::tables::linetype::{
+                                LineTypeComplexContent, LineTypeComplexData, LineTypeElement,
+                            };
+                            let is_complex = s.dwg_flags != 0
+                                || s.offset_x.abs() > 1e-12
+                                || s.offset_y.abs() > 1e-12
+                                || (s.scale - 1.0).abs() > 1e-12
+                                || s.rotation.abs() > 1e-12;
+                            let complex = if is_complex {
+                                let content = if s.dwg_flags & 0x04 != 0 {
+                                    LineTypeComplexContent::Text { text: s.text.clone() }
+                                } else {
+                                    LineTypeComplexContent::Shape { shape_number: s.shape_number }
+                                };
+                                Some(LineTypeComplexData {
+                                    content,
+                                    style_handle: Handle::from(sh),
+                                    scale: s.scale,
+                                    rotation: s.rotation,
+                                    absolute_rotation: s.dwg_flags & 0x01 != 0,
+                                    offset: [s.offset_x, s.offset_y],
+                                })
+                            } else {
+                                None
+                            };
+                            LineTypeElement { length: s.length, complex }
+                        })
+                        .collect();
                     let _ = document.line_types.remove(&data.name);
                     let _ = document.line_types.add(lt);
                 },

@@ -102,7 +102,10 @@ pub struct LinetypeSegment {
     pub offset_y: f64,
     pub scale: f64,
     pub rotation: f64,
-    pub shape_flags: i16,
+    /// Raw DWG dwg_flags (DXF 74):
+    /// 0x01 = absolute rotation, 0x02 = shape, 0x04 = text
+    pub dwg_flags: i16,
+    pub text: String,
 }
 
 /// Parsed VIEW data.
@@ -449,6 +452,26 @@ pub fn read_text_style(
     }
 }
 
+/// Extract text from a linetype text area buffer into segments.
+/// For text-type elements (DWG 0x04 bit), shape_number is a byte offset into
+/// the text area pointing at a null-terminated string.
+/// Per OpenDesign spec §20.4.58.
+fn extract_text_strings(segments: &mut [LinetypeSegment], area: &[u8]) {
+    let cap = area.len();
+    for seg in segments.iter_mut() {
+        // DWG convention: bit 0x04 = text element
+        if seg.dwg_flags & 0x04 != 0 {
+            let start = (seg.shape_number as usize).min(cap.saturating_sub(1));
+            let end = area[start..]
+                .iter()
+                .position(|&b| b == 0)
+                .map(|i| start + i)
+                .unwrap_or(cap);
+            seg.text = String::from_utf8_lossy(&area[start..end]).into_owned();
+        }
+    }
+}
+
 /// Read LTYPE table entry data.
 pub fn read_linetype(
     reader: &mut DwgMergedReader,
@@ -470,18 +493,35 @@ pub fn read_linetype(
         let offset_y = reader.read_raw_double();
         let scale = reader.read_bit_double();
         let rotation = reader.read_bit_double();
-        let shape_flags = reader.read_bit_short();
+        let dwg_flags = reader.read_bit_short();
         segments.push(LinetypeSegment {
             length, shape_number, offset_x, offset_y,
-            scale, rotation, shape_flags,
+            scale, rotation, dwg_flags,
+            text: String::new(),
         });
     }
 
-    // R2004 and earlier: 256-byte text area
-    if !version.r2007_plus() {
-        for _ in 0..256 {
-            reader.read_byte();
+    // Per spec (OpenDesign §20.4.58):
+    //   R2004 and earlier: 256-byte text area (always present).
+    //   R2007+: 512-byte text area ONLY if the 0x02 bit (DWG shape element)
+    //   is set on any ShapeFlag entry.
+    if version.r2007_plus() {
+        // Text area is present if any element is complex (shape 0x02 OR text 0x04).
+        let has_complex_elem = segments.iter().any(|s| s.dwg_flags & 0x06 != 0);
+        if has_complex_elem {
+            let mut text_area = [0u8; 512];
+            for b in text_area.iter_mut() {
+                *b = reader.read_byte();
+            }
+            extract_text_strings(&mut segments, &text_area);
         }
+    } else {
+        // R2004 and earlier: unconditional 256-byte text area.
+        let mut text_area = [0u8; 256];
+        for b in text_area.iter_mut() {
+            *b = reader.read_byte();
+        }
+        extract_text_strings(&mut segments, &text_area);
     }
 
     // Xref handle

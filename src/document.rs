@@ -1774,6 +1774,25 @@ impl CadDocument {
             }
         }
 
+        // Check table entries — without this, object handle remapping in
+        // section 1d can assign handles that collide with table entry handles.
+        macro_rules! scan_table {
+            ($tbl:expr) => {
+                for e in $tbl.iter() {
+                    let h = e.handle().value();
+                    if h >= max_handle { max_handle = h + 1; }
+                }
+            }
+        }
+        scan_table!(self.layers);
+        scan_table!(self.line_types);
+        scan_table!(self.text_styles);
+        scan_table!(self.dim_styles);
+        scan_table!(self.app_ids);
+        scan_table!(self.views);
+        scan_table!(self.vports);
+        scan_table!(self.ucss);
+
         self.next_handle = max_handle;
 
         // --- 1b. Resolve table handle collisions ---
