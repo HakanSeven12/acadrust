@@ -920,13 +920,13 @@ impl<'a> DwgObjectWriter<'a> {
         // View dir 3BD 16
         self.writer.write_3bit_double(vport.view_direction);
         // View twist BD 51
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(vport.view_twist);
         // Lens length BD 42
         self.writer.write_bit_double(vport.lens_length);
         // Front clip BD 43
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(vport.front_clip);
         // Back clip BD 44
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(vport.back_clip);
 
         // View mode X 71 — 4 bits: 0123
         self.writer.write_bit(false); // perspective
@@ -967,16 +967,16 @@ impl<'a> DwgObjectWriter<'a> {
             });
 
         // UCSFOLLOW B 71
-        self.writer.write_bit(false);
+        self.writer.write_bit(vport.ucsfollow);
         // Circle zoom BS 72
-        self.writer.write_bit_short(100);
+        self.writer.write_bit_short(vport.circle_zoom);
         // Fast zoom B 73
-        self.writer.write_bit(true);
+        self.writer.write_bit(vport.fast_zoom);
         // UCSICON X 74 — 2 individual bits
         self.writer.write_bit(true); // bit 0: UCS icon display ON
         self.writer.write_bit(true); // bit 1: UCS icon at origin
         // Grid on/off B 76
-        self.writer.write_bit(true);
+        self.writer.write_bit(vport.grid_on);
         // Grid spacing 2RD 15
         self.writer
             .write_2raw_double(crate::types::Vector2 {
@@ -984,13 +984,13 @@ impl<'a> DwgObjectWriter<'a> {
                 y: vport.grid_spacing.y,
             });
         // Snap on/off B 75
-        self.writer.write_bit(false);
+        self.writer.write_bit(vport.snap_on);
         // Snap style B 77
-        self.writer.write_bit(false);
+        self.writer.write_bit(vport.snap_style);
         // Snap isopair BS 78
-        self.writer.write_bit_short(0);
+        self.writer.write_bit_short(vport.snap_isopair);
         // Snap rot BD 50
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(vport.snap_rotation);
         // Snap base 2RD 13
         self.writer
             .write_2raw_double(crate::types::Vector2 {
