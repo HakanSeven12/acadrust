@@ -166,6 +166,41 @@ pub struct Layout {
     pub paper_height: f64,
     /// Plot rotation from PlotSettings (code 73): 0=none, 1=90°, 2=180°, 3=270°.
     pub plot_rotation: i16,
+
+    // ── Remaining embedded PlotSettings fields ──────────────────────────────
+    // The LAYOUT object embeds a full PlotSettings record. Preserving only the
+    // paper size left the sheet unsized in AutoCAD (rendered tiny in the corner
+    // because the paper-size name / units / margins were dropped). Keep the rest
+    // so the layout round-trips faithfully. See issue #156.
+    pub plot_page_name: String,
+    pub plot_printer_name: String,
+    /// Paper-size name (e.g. "ISO_A4_(210.00_x_297.00_MM)"). AutoCAD renders the
+    /// sheet from this; an empty name shows no/wrong paper.
+    pub paper_size: String,
+    pub plot_view_name: String,
+    pub plot_style_sheet: String,
+    pub plot_margin_left: f64,
+    pub plot_margin_bottom: f64,
+    pub plot_margin_right: f64,
+    pub plot_margin_top: f64,
+    pub plot_origin_x: f64,
+    pub plot_origin_y: f64,
+    pub plot_window_min_x: f64,
+    pub plot_window_min_y: f64,
+    pub plot_window_max_x: f64,
+    pub plot_window_max_y: f64,
+    /// Paper units (code 72): 0=inches, 1=mm, 2=pixels.
+    pub plot_paper_units: i16,
+    pub plot_type: i16,
+    pub plot_scale_numerator: f64,
+    pub plot_scale_denominator: f64,
+    pub plot_scale_type: i16,
+    pub plot_scale_factor: f64,
+    pub paper_image_origin_x: f64,
+    pub paper_image_origin_y: f64,
+    pub shade_plot_mode: i16,
+    pub shade_plot_resolution: i16,
+    pub shade_plot_dpi: i16,
 }
 
 impl Layout {
@@ -195,6 +230,32 @@ impl Layout {
             paper_width: 0.0,
             paper_height: 0.0,
             plot_rotation: 0,
+            plot_page_name: String::new(),
+            plot_printer_name: String::new(),
+            paper_size: String::new(),
+            plot_view_name: String::new(),
+            plot_style_sheet: String::new(),
+            plot_margin_left: 0.0,
+            plot_margin_bottom: 0.0,
+            plot_margin_right: 0.0,
+            plot_margin_top: 0.0,
+            plot_origin_x: 0.0,
+            plot_origin_y: 0.0,
+            plot_window_min_x: 0.0,
+            plot_window_min_y: 0.0,
+            plot_window_max_x: 0.0,
+            plot_window_max_y: 0.0,
+            plot_paper_units: 0,
+            plot_type: 5,
+            plot_scale_numerator: 1.0,
+            plot_scale_denominator: 1.0,
+            plot_scale_type: 0,
+            plot_scale_factor: 1.0,
+            paper_image_origin_x: 0.0,
+            paper_image_origin_y: 0.0,
+            shade_plot_mode: 0,
+            shade_plot_resolution: 0,
+            shade_plot_dpi: 300,
         }
     }
 }

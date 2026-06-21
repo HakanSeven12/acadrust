@@ -269,7 +269,7 @@ impl<'a> DwgObjectWriter<'a> {
         // ── PlotSettings preamble ──
         // ModelType flag (bit 0x400) must be set for model space layouts
         let plot_flags: i16 = if layout.name == "Model" { 0x400 } else { 0 };
-        self.write_plot_settings_data(plot_flags);
+        self.write_plot_settings_data(plot_flags, layout);
 
         // ── Layout-specific data ──
         // Layout name (TV)
@@ -358,70 +358,82 @@ impl<'a> DwgObjectWriter<'a> {
     ///
     /// Field order must match C# DwgObjectWriter.Objects.cs writePlotSettings()
     /// exactly. Uses simplified/default values.
-    fn write_plot_settings_data(&mut self, plot_flags: i16) {
+    fn write_plot_settings_data(&mut self, plot_flags: i16, layout: &crate::objects::Layout) {
+        // Fall back to A4 landscape when the layout carries no paper size
+        // (e.g. freshly created layouts that never read a PlotSettings block).
+        let (paper_width, paper_height) =
+            if layout.paper_width > 0.0 && layout.paper_height > 0.0 {
+                (layout.paper_width, layout.paper_height)
+            } else {
+                (297.0, 210.0)
+            };
         // Page setup name (TV 1)
-        self.writer.write_variable_text("");
+        self.writer.write_variable_text(&layout.plot_page_name);
         // Printer / Config (TV 2)
-        self.writer.write_variable_text("");
+        self.writer.write_variable_text(&layout.plot_printer_name);
         // Plot layout flags (BS 70)
         self.writer.write_bit_short(plot_flags);
 
         // Margins (BD: left, bottom, right, top)
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(layout.plot_margin_left);
+        self.writer.write_bit_double(layout.plot_margin_bottom);
+        self.writer.write_bit_double(layout.plot_margin_right);
+        self.writer.write_bit_double(layout.plot_margin_top);
 
         // Paper width (BD 44), height (BD 45)
-        self.writer.write_bit_double(297.0);
-        self.writer.write_bit_double(210.0);
+        self.writer.write_bit_double(paper_width);
+        self.writer.write_bit_double(paper_height);
 
         // Paper size (TV 4)
-        self.writer.write_variable_text("");
+        self.writer.write_variable_text(&layout.paper_size);
 
         // Plot origin (2BD 46,47)
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(layout.plot_origin_x);
+        self.writer.write_bit_double(layout.plot_origin_y);
 
         // Paper units (BS 72), Plot rotation (BS 73), Plot type (BS 74)
-        self.writer.write_bit_short(0); // paper units
-        self.writer.write_bit_short(0); // rotation
-        self.writer.write_bit_short(5); // type: Layout
+        self.writer.write_bit_short(layout.plot_paper_units);
+        self.writer.write_bit_short(layout.plot_rotation);
+        self.writer.write_bit_short(layout.plot_type);
 
         // Plot window (2BD min, 2BD max)
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(layout.plot_window_min_x);
+        self.writer.write_bit_double(layout.plot_window_min_y);
+        self.writer.write_bit_double(layout.plot_window_max_x);
+        self.writer.write_bit_double(layout.plot_window_max_y);
 
         // R13-R2000 only: Plot view name (TV 6)
         if self.version.r13_15_only() {
-            self.writer.write_variable_text("");
+            self.writer.write_variable_text(&layout.plot_view_name);
         }
 
         // Real world units / numerator (BD 142)
-        self.writer.write_bit_double(1.0);
+        let num = if layout.plot_scale_numerator != 0.0 { layout.plot_scale_numerator } else { 1.0 };
+        let den = if layout.plot_scale_denominator != 0.0 { layout.plot_scale_denominator } else { 1.0 };
+        self.writer.write_bit_double(num);
         // Drawing units / denominator (BD 143)
-        self.writer.write_bit_double(1.0);
+        self.writer.write_bit_double(den);
 
         // Current style sheet (TV 7)
-        self.writer.write_variable_text("");
+        self.writer.write_variable_text(&layout.plot_style_sheet);
 
         // Scale type (BS 75)
-        self.writer.write_bit_short(0);
+        self.writer.write_bit_short(layout.plot_scale_type);
 
         // Scale factor (BD 147) — standard scale value
-        self.writer.write_bit_double(1.0);
+        let factor = if layout.plot_scale_factor != 0.0 { layout.plot_scale_factor } else { 1.0 };
+        self.writer.write_bit_double(factor);
 
         // Paper image origin (2BD 148,149)
-        self.writer.write_bit_double(0.0);
-        self.writer.write_bit_double(0.0);
+        self.writer.write_bit_double(layout.paper_image_origin_x);
+        self.writer.write_bit_double(layout.paper_image_origin_y);
 
         // R2004+: shade plot fields
         if self.version.r2004_plus() {
-            self.writer.write_bit_short(0);   // shade plot mode (BS 76)
-            self.writer.write_bit_short(0);   // shade plot res level (BS 77)
-            self.writer.write_bit_short(300); // shade plot DPI (BS 78)
+            self.writer.write_bit_short(layout.shade_plot_mode);
+            self.writer.write_bit_short(layout.shade_plot_resolution);
+            let dpi = if layout.shade_plot_dpi != 0 { layout.shade_plot_dpi } else { 300 };
+            self.writer.write_bit_short(dpi);
 
             // Plot view handle (hard pointer)
             self.writer

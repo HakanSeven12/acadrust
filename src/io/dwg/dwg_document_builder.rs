@@ -2132,6 +2132,33 @@ impl DwgDocumentBuilder {
                     obj.paper_width   = data.plot_settings.paper_width;
                     obj.paper_height  = data.plot_settings.paper_height;
                     obj.plot_rotation = data.plot_settings.rotation;
+                    let ps = &data.plot_settings;
+                    obj.plot_page_name = ps.page_name.clone();
+                    obj.plot_printer_name = ps.printer_name.clone();
+                    obj.paper_size = ps.paper_size.clone();
+                    obj.plot_view_name = ps.plot_view_name.clone();
+                    obj.plot_style_sheet = ps.current_style_sheet.clone();
+                    obj.plot_margin_left = ps.left_margin;
+                    obj.plot_margin_bottom = ps.bottom_margin;
+                    obj.plot_margin_right = ps.right_margin;
+                    obj.plot_margin_top = ps.top_margin;
+                    obj.plot_origin_x = ps.origin_x;
+                    obj.plot_origin_y = ps.origin_y;
+                    obj.plot_window_min_x = ps.window_min_x;
+                    obj.plot_window_min_y = ps.window_min_y;
+                    obj.plot_window_max_x = ps.window_max_x;
+                    obj.plot_window_max_y = ps.window_max_y;
+                    obj.plot_paper_units = ps.paper_units;
+                    obj.plot_type = ps.plot_type;
+                    obj.plot_scale_numerator = ps.scale_numerator;
+                    obj.plot_scale_denominator = ps.scale_denominator;
+                    obj.plot_scale_type = ps.scale_type;
+                    obj.plot_scale_factor = ps.scale_factor;
+                    obj.paper_image_origin_x = ps.paper_image_x;
+                    obj.paper_image_origin_y = ps.paper_image_y;
+                    obj.shade_plot_mode = ps.shade_plot_mode;
+                    obj.shade_plot_resolution = ps.shade_plot_resolution;
+                    obj.shade_plot_dpi = ps.shade_plot_dpi;
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::Layout(obj),
