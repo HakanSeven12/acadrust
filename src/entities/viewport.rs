@@ -50,47 +50,49 @@ impl ViewportStatusFlags {
         }
     }
 
-    /// Create from DXF bit flag value
+    /// Create from the DWG/DXF viewport status bit-coded flags (group 90).
+    /// The low bits run perspective(0x1) … iso_pair_right(0x2000); the two high
+    /// bits are viewport-locked(0x4000) and viewport-on/visible(0x8000).
     pub fn from_bits(bits: i32) -> Self {
         Self {
-            is_on: (bits & (1 << 0)) != 0,
-            perspective: (bits & (1 << 1)) != 0,
-            front_clipping: (bits & (1 << 2)) != 0,
-            back_clipping: (bits & (1 << 3)) != 0,
-            ucs_follow: (bits & (1 << 4)) != 0,
-            front_clip_not_at_eye: (bits & (1 << 5)) != 0,
-            ucs_icon_visible: (bits & (1 << 6)) != 0,
-            ucs_icon_at_origin: (bits & (1 << 7)) != 0,
-            fast_zoom: (bits & (1 << 8)) != 0,
-            snap_on: (bits & (1 << 9)) != 0,
-            grid_on: (bits & (1 << 10)) != 0,
-            isometric_snap: (bits & (1 << 11)) != 0,
-            hide_plot: (bits & (1 << 12)) != 0,
-            iso_pair_top: (bits & (1 << 13)) != 0,
-            iso_pair_right: (bits & (1 << 14)) != 0,
-            locked: (bits & (1 << 15)) != 0,
+            perspective: (bits & (1 << 0)) != 0,
+            front_clipping: (bits & (1 << 1)) != 0,
+            back_clipping: (bits & (1 << 2)) != 0,
+            ucs_follow: (bits & (1 << 3)) != 0,
+            front_clip_not_at_eye: (bits & (1 << 4)) != 0,
+            ucs_icon_visible: (bits & (1 << 5)) != 0,
+            ucs_icon_at_origin: (bits & (1 << 6)) != 0,
+            fast_zoom: (bits & (1 << 7)) != 0,
+            snap_on: (bits & (1 << 8)) != 0,
+            grid_on: (bits & (1 << 9)) != 0,
+            isometric_snap: (bits & (1 << 10)) != 0,
+            hide_plot: (bits & (1 << 11)) != 0,
+            iso_pair_top: (bits & (1 << 12)) != 0,
+            iso_pair_right: (bits & (1 << 13)) != 0,
+            locked: (bits & (1 << 14)) != 0,
+            is_on: (bits & (1 << 15)) != 0,
         }
     }
 
-    /// Convert to DXF bit flag value
+    /// Convert to the DWG/DXF viewport status bit-coded flags (group 90).
     pub fn to_bits(&self) -> i32 {
         let mut bits = 0;
-        if self.is_on { bits |= 1 << 0; }
-        if self.perspective { bits |= 1 << 1; }
-        if self.front_clipping { bits |= 1 << 2; }
-        if self.back_clipping { bits |= 1 << 3; }
-        if self.ucs_follow { bits |= 1 << 4; }
-        if self.front_clip_not_at_eye { bits |= 1 << 5; }
-        if self.ucs_icon_visible { bits |= 1 << 6; }
-        if self.ucs_icon_at_origin { bits |= 1 << 7; }
-        if self.fast_zoom { bits |= 1 << 8; }
-        if self.snap_on { bits |= 1 << 9; }
-        if self.grid_on { bits |= 1 << 10; }
-        if self.isometric_snap { bits |= 1 << 11; }
-        if self.hide_plot { bits |= 1 << 12; }
-        if self.iso_pair_top { bits |= 1 << 13; }
-        if self.iso_pair_right { bits |= 1 << 14; }
-        if self.locked { bits |= 1 << 15; }
+        if self.perspective { bits |= 1 << 0; }
+        if self.front_clipping { bits |= 1 << 1; }
+        if self.back_clipping { bits |= 1 << 2; }
+        if self.ucs_follow { bits |= 1 << 3; }
+        if self.front_clip_not_at_eye { bits |= 1 << 4; }
+        if self.ucs_icon_visible { bits |= 1 << 5; }
+        if self.ucs_icon_at_origin { bits |= 1 << 6; }
+        if self.fast_zoom { bits |= 1 << 7; }
+        if self.snap_on { bits |= 1 << 8; }
+        if self.grid_on { bits |= 1 << 9; }
+        if self.isometric_snap { bits |= 1 << 10; }
+        if self.hide_plot { bits |= 1 << 11; }
+        if self.iso_pair_top { bits |= 1 << 12; }
+        if self.iso_pair_right { bits |= 1 << 13; }
+        if self.locked { bits |= 1 << 14; }
+        if self.is_on { bits |= 1 << 15; }
         bits
     }
 }
@@ -720,12 +722,19 @@ mod tests {
 
     #[test]
     fn test_viewport_status_flags() {
-        let flags = ViewportStatusFlags::from_bits(0b1000000000000001);
+        // Spec layout (group 90): bit 15 = viewport on, bit 14 = locked,
+        // bit 0 = perspective. 0x8001 = on + perspective.
+        let flags = ViewportStatusFlags::from_bits(0x8001);
         assert!(flags.is_on);
-        assert!(flags.locked);
-        assert!(!flags.perspective);
-        
-        assert_eq!(flags.to_bits(), 0b1000000000000001);
+        assert!(flags.perspective);
+        assert!(!flags.locked);
+        assert_eq!(flags.to_bits(), 0x8001);
+
+        // Locked, off viewport: bit 14 only.
+        let locked = ViewportStatusFlags::from_bits(0x4000);
+        assert!(locked.locked);
+        assert!(!locked.is_on);
+        assert_eq!(locked.to_bits(), 0x4000);
     }
 
     #[test]
