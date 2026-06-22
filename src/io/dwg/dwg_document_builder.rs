@@ -522,9 +522,11 @@ impl DwgDocumentBuilder {
                                 || s.offset_x.abs() > 1e-12
                                 || s.offset_y.abs() > 1e-12
                                 || (s.scale - 1.0).abs() > 1e-12
-                                || s.rotation.abs() > 1e-12;
+                                || s.rotation.abs() > 1e-12
+                                || s.shape_number != 0
+                                || sh != 0;
                             let complex = if is_complex {
-                                let content = if s.dwg_flags & 0x04 != 0 {
+                                let content = if s.dwg_flags & 0x02 != 0 {
                                     LineTypeComplexContent::Text { text: s.text.clone() }
                                 } else {
                                     LineTypeComplexContent::Shape { shape_number: s.shape_number }

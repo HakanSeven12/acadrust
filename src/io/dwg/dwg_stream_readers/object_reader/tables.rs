@@ -103,7 +103,7 @@ pub struct LinetypeSegment {
     pub scale: f64,
     pub rotation: f64,
     /// Raw DWG dwg_flags (DXF 74):
-    /// 0x01 = absolute rotation, 0x02 = shape, 0x04 = text
+    /// 0x01 = absolute rotation, 0x02 = text, 0x04 = shape (opposite of OpenDesign spec; confirmed by ezdxf and empirical testing)
     pub dwg_flags: i16,
     pub text: String,
 }
@@ -453,21 +453,42 @@ pub fn read_text_style(
 }
 
 /// Extract text from a linetype text area buffer into segments.
-/// For text-type elements (DWG 0x04 bit), shape_number is a byte offset into
+/// For text-type elements (DWG 0x02 bit), shape_number is a byte offset into
 /// the text area pointing at a null-terminated string.
+///
+/// R2004 and earlier: 256-byte area of null-terminated ASCII strings.
+/// R2007+: 512-byte area of null-terminated UTF-16LE strings (2 bytes/char,
+/// terminated by a 0x0000 word). shape_number is still a BYTE offset.
+/// The 512-byte size = 256 chars × 2 bytes matches the R2004 256 ASCII chars.
 /// Per OpenDesign spec §20.4.58.
-fn extract_text_strings(segments: &mut [LinetypeSegment], area: &[u8]) {
+fn extract_text_strings(segments: &mut [LinetypeSegment], area: &[u8], unicode: bool) {
     let cap = area.len();
     for seg in segments.iter_mut() {
-        // DWG convention: bit 0x04 = text element
-        if seg.dwg_flags & 0x04 != 0 {
+        // DWG convention: bit 0x02 = text element (0x04 = shape)
+        if seg.dwg_flags & 0x02 != 0 {
             let start = (seg.shape_number as usize).min(cap.saturating_sub(1));
-            let end = area[start..]
-                .iter()
-                .position(|&b| b == 0)
-                .map(|i| start + i)
-                .unwrap_or(cap);
-            seg.text = String::from_utf8_lossy(&area[start..end]).into_owned();
+            if unicode {
+                // UTF-16LE: read 2-byte code units until the [0x00, 0x00] null.
+                let mut code_units: Vec<u16> = Vec::new();
+                let mut i = start;
+                while i + 1 < cap {
+                    let lo = area[i];
+                    let hi = area[i + 1];
+                    if lo == 0 && hi == 0 {
+                        break;
+                    }
+                    code_units.push(u16::from_le_bytes([lo, hi]));
+                    i += 2;
+                }
+                seg.text = String::from_utf16_lossy(&code_units);
+            } else {
+                let end = area[start..]
+                    .iter()
+                    .position(|&b| b == 0)
+                    .map(|i| start + i)
+                    .unwrap_or(cap);
+                seg.text = String::from_utf8_lossy(&area[start..end]).into_owned();
+            }
         }
     }
 }
@@ -503,17 +524,17 @@ pub fn read_linetype(
 
     // Per spec (OpenDesign §20.4.58):
     //   R2004 and earlier: 256-byte text area (always present).
-    //   R2007+: 512-byte text area ONLY if the 0x02 bit (DWG shape element)
+    //   R2007+: 512-byte text area ONLY if the 0x02 bit (text) or 0x04 bit (shape)
     //   is set on any ShapeFlag entry.
     if version.r2007_plus() {
-        // Text area is present if any element is complex (shape 0x02 OR text 0x04).
+        // Text area is present if any element is complex (text 0x02 or shape 0x04).
         let has_complex_elem = segments.iter().any(|s| s.dwg_flags & 0x06 != 0);
         if has_complex_elem {
             let mut text_area = [0u8; 512];
             for b in text_area.iter_mut() {
                 *b = reader.read_byte();
             }
-            extract_text_strings(&mut segments, &text_area);
+            extract_text_strings(&mut segments, &text_area, true);
         }
     } else {
         // R2004 and earlier: unconditional 256-byte text area.
@@ -521,7 +542,7 @@ pub fn read_linetype(
         for b in text_area.iter_mut() {
             *b = reader.read_byte();
         }
-        extract_text_strings(&mut segments, &text_area);
+        extract_text_strings(&mut segments, &text_area, false);
     }
 
     // Xref handle
