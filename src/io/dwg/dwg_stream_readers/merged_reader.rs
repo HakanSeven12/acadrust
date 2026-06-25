@@ -299,6 +299,14 @@ impl DwgMergedReader {
         }
     }
 
+    /// Read a handle reference from the MAIN (data) stream, even when a
+    /// separate handle stream exists. A few objects store some handle
+    /// references inline in the data section rather than in the handle stream
+    /// — e.g. the SORTENTSTABLE sort handles. (#146)
+    pub fn read_main_handle(&mut self) -> u64 {
+        self.main.read_handle_relative(self.ref_handle)
+    }
+
     /// Set the reference handle for offset-based handle codes.
     ///
     /// Must be called after reading the current object's own handle

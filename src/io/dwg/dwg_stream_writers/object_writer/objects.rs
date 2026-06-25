@@ -850,16 +850,20 @@ impl<'a> DwgObjectWriter<'a> {
         let entries: Vec<_> = table.entries().collect();
         self.writer.write_bit_long(entries.len() as i32);
 
+        // Sort handles are stored inline in the DATA section (one per entry);
+        // the owner block and the sorted entity handles follow in the handle
+        // stream (owner first, then one per entry). Mirrors `read_sort_entities_
+        // table`. (#146)
         for entry in &entries {
             self.writer
-                .write_handle(DwgReferenceType::SoftPointer, entry.sort_handle.value());
-            self.writer
-                .write_handle(DwgReferenceType::HardPointer, entry.entity_handle.value());
+                .write_main_handle(DwgReferenceType::SoftPointer, entry.sort_handle.value());
         }
-
-        // Block owner handle
         self.writer
             .write_handle(DwgReferenceType::HardPointer, table.block_owner_handle.value());
+        for entry in &entries {
+            self.writer
+                .write_handle(DwgReferenceType::SoftPointer, entry.entity_handle.value());
+        }
 
         self.register_object(table.handle);
     }

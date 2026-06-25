@@ -929,8 +929,16 @@ impl<'a> DwgObjectWriter<'a> {
                     // the same camera.
                     let half_h = vp.view_height.abs() / 2.0;
                     let half_w = half_h * ar;
-                    let cx = vp.view_target.x + vp.view_center.x;
-                    let cy = vp.view_target.y + vp.view_center.y;
+                    // view_center is in DCS — the view plane rotated by the
+                    // view twist. The WCS center is view_target plus the
+                    // center rotated back by the twist (Rz(-twist)); using the
+                    // raw view_center here would misjudge any twisted view as
+                    // "missing" the geometry and then clobber it.
+                    let (sin_t, cos_t) = vp.view_twist.sin_cos();
+                    let cx = vp.view_target.x + cos_t * vp.view_center.x
+                        + sin_t * vp.view_center.y;
+                    let cy = vp.view_target.y - sin_t * vp.view_center.x
+                        + cos_t * vp.view_center.y;
                     let overlaps = cx + half_w >= ext.min.x
                         && cx - half_w <= ext.max.x
                         && cy + half_h >= ext.min.y
@@ -939,10 +947,15 @@ impl<'a> DwgObjectWriter<'a> {
                         // Ensure the full extents fit, with 10% margin.
                         let vh = (ext_height.max(ext_width / ar)) * 1.1;
                         vp.view_height = if vh > 0.0 { vh } else { 10.0 };
-                        // view_center is in DCS, whose origin = view_target.
-                        // Keep view_target at its default (origin) so
-                        // view_center acts as the WCS center directly.
-                        vp.view_center = Vector2::new(center.x, center.y);
+                        // Store the WCS extents center back in DCS: keep
+                        // view_target at the origin and rotate the center by
+                        // the twist (Rz(+twist)) so the reader folds it back to
+                        // the WCS center instead of double-rotating it.
+                        vp.view_target = crate::types::Vector3::ZERO;
+                        vp.view_center = Vector2::new(
+                            cos_t * center.x - sin_t * center.y,
+                            sin_t * center.x + cos_t * center.y,
+                        );
                     }
                 }
             }

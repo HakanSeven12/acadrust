@@ -677,13 +677,25 @@ pub fn read_scale(reader: &mut DwgMergedReader) -> ScaleData {
 
 pub fn read_sort_entities_table(reader: &mut DwgMergedReader) -> SortEntitiesTableData {
     let num_entries = safe_count(reader.read_bit_long());
-    let mut entries = Vec::with_capacity(num_entries as usize);
+    // The per-entry sort handles are stored inline in the DATA section; the
+    // owner block and the sorted entity handles follow in the handle stream
+    // (owner first, then one handle per entry). The previous code read a
+    // sort+entity pair per entry from the handle stream and the owner last,
+    // which scrambled the order and the owner block on files written by other
+    // CAD apps — draw order was effectively ignored. (#146)
+    let mut sort_handles = Vec::with_capacity(num_entries as usize);
     for _ in 0..num_entries {
-        let sort_handle = reader.read_handle();
-        let entity_handle = reader.read_handle();
-        entries.push(SortEntitiesEntry { sort_handle, entity_handle });
+        sort_handles.push(reader.read_main_handle());
     }
     let block_owner_handle = reader.read_handle();
+    let mut entries = Vec::with_capacity(num_entries as usize);
+    for k in 0..num_entries as usize {
+        let entity_handle = reader.read_handle();
+        entries.push(SortEntitiesEntry {
+            sort_handle: sort_handles[k],
+            entity_handle,
+        });
+    }
     SortEntitiesTableData { entries, block_owner_handle }
 }
 
@@ -1095,12 +1107,16 @@ mod tests {
         let d = DxfVersion::AC1015;
         let mut r = make_reader(v, d, |w| {
             w.write_bit_long(1); // 1 entry
-            w.write_handle(DwgReferenceType::SoftPointer, 0x10);
-            w.write_handle(DwgReferenceType::HardPointer, 0x20);
+            // Layout: sort handles in the DATA section, then owner + entities in
+            // the handle stream.
+            w.write_main_handle(DwgReferenceType::SoftPointer, 0x10); // sort (data)
             w.write_handle(DwgReferenceType::HardPointer, 0x30); // block owner
+            w.write_handle(DwgReferenceType::SoftPointer, 0x20); // entity handle
         });
         let st = read_sort_entities_table(&mut r);
         assert_eq!(st.entries.len(), 1);
         assert_eq!(st.block_owner_handle, 0x30);
+        assert_eq!(st.entries[0].sort_handle, 0x10);
+        assert_eq!(st.entries[0].entity_handle, 0x20);
     }
 }

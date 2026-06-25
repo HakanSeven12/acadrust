@@ -331,6 +331,14 @@ impl DwgMergedWriter {
         self.handle.write_handle(ref_type, handle);
     }
 
+    /// Write a handle reference into the MAIN (data) stream, for objects that
+    /// store some handle refs inline in the data section rather than the handle
+    /// stream — e.g. the SORTENTSTABLE sort handles. Symmetric with the
+    /// reader's `read_main_handle`. (#146)
+    pub fn write_main_handle(&mut self, ref_type: DwgReferenceType, handle: u64) {
+        self.main.write_handle(ref_type, handle);
+    }
+
     /// Write an undefined-type handle reference.
     pub fn write_handle_undefined(&mut self, handle: u64) {
         self.handle.write_handle_undefined(handle);
