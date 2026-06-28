@@ -1704,14 +1704,24 @@ impl CadDocument {
         Ok(layout_handle)
     }
 
-    /// Get the number of entities
+    /// Get the number of entities.
+    ///
+    /// Structural BLOCK/ENDBLK markers are not counted — they delimit block
+    /// definitions and are emitted from block records, not the entity list.
     pub fn entity_count(&self) -> usize {
-        self.entities.len()
+        self.entities().count()
     }
 
-    /// Iterate over all entities
+    /// Iterate over all drawing entities.
+    ///
+    /// Structural BLOCK/ENDBLK markers are stored in the backing vector (the
+    /// DWG reader records them so block base points etc. survive a round-trip)
+    /// but are hidden here: they are block delimiters, not drawing entities, so
+    /// a freshly-built document and a round-tripped one report the same set.
     pub fn entities(&self) -> impl Iterator<Item = &EntityType> {
-        self.entities.iter()
+        self.entities
+            .iter()
+            .filter(|e| !matches!(e, EntityType::Block(_) | EntityType::BlockEnd(_)))
     }
 
     /// Iterate over all entities mutably

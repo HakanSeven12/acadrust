@@ -197,6 +197,12 @@ fn compute_max_handle(document: &CadDocument) -> u64 {
             let h = eh.value();
             if h >= max { max = h + 1; }
         }
+        // BLOCK/ENDBLK markers are excluded from document.entities(), so scan
+        // their handles here explicitly to avoid re-issuing them.
+        let h = br.block_entity_handle.value();
+        if h >= max { max = h + 1; }
+        let h = br.block_end_handle.value();
+        if h >= max { max = h + 1; }
     }
     for r in document.layers.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
     for r in document.line_types.iter() { let h = r.handle.value(); if h >= max { max = h + 1; } }
