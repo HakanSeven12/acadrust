@@ -200,6 +200,17 @@ pub struct MTextData {
     pub linespacing_factor: f64,
     pub unknown_bit: bool,
     pub background_flags: i32,
+    pub background_scale: f64,
+    pub background_color: Color,
+    pub background_transparency: i32,
+    pub is_annotative: bool,
+    pub column_type: i16,
+    pub column_count: i32,
+    pub column_flow_reversed: bool,
+    pub column_auto_height: bool,
+    pub column_width: f64,
+    pub column_gutter: f64,
+    pub column_heights: Vec<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -687,19 +698,101 @@ pub fn read_mtext(
     let unknown_bit = reader.read_bit();
 
     let mut background_flags = 0i32;
+    let mut background_scale = 1.5;
+    let mut background_color = Color::ByLayer;
+    let mut background_transparency = 0i32;
     if version.r2004_plus() {
+        // Background flags BL 90: 0 = none, 1 = fill, 2 = drawing window color,
+        // 0x10 = text frame (R2018+).
         background_flags = reader.read_bit_long();
+
+        // The background-fill block follows when the UseBackgroundFillColor bit
+        // (0x01) is set, or — for R2018+ — when the TextFrame bit (0x10) is set.
+        if (background_flags & 0x01) != 0
+            || (version.r2018_plus(dxf_version) && (background_flags & 0x10) != 0)
+        {
+            // Background scale factor BD 45 (default 1.5)
+            background_scale = reader.read_bit_double();
+            // Background color CMC 63
+            background_color = reader.read_cm_color();
+            // Background transparency BL 441
+            background_transparency = reader.read_bit_long();
+        }
     }
 
+    // R2018+: "is NOT annotative" bit, then (when not annotative) a block of
+    // redundant fields followed by optional column data.
+    let mut is_annotative = true;
+    let mut column_type = 0i16;
+    let mut column_count = 0i32;
+    let mut column_flow_reversed = false;
+    let mut column_auto_height = false;
+    let mut column_width = 0.0;
+    let mut column_gutter = 0.0;
+    let mut column_heights = Vec::new();
     if version.r2018_plus(dxf_version) {
-        let _is_not_annotative = reader.read_bit();
+        // Is NOT annotative B
+        let is_not_annotative = reader.read_bit();
+        is_annotative = !is_not_annotative;
+
+        if is_not_annotative {
+            // Version BS (default 0)
+            let _version_bs = reader.read_bit_short();
+            // Default flag B (default true)
+            let _default_flag = reader.read_bit();
+            // Registered application H (hard pointer)
+            let _app_handle = reader.read_handle();
+
+            // ── BEGIN redundant fields (already captured above; discarded) ──
+            // Attachment point BL
+            let _attachment = reader.read_bit_long();
+            // X-axis dir 3BD
+            let _x_axis = reader.read_3bit_double();
+            // Insertion point 3BD
+            let _insertion = reader.read_3bit_double();
+            // Rect width BD
+            let _rect_width = reader.read_bit_double();
+            // Rect height BD
+            let _rect_height = reader.read_bit_double();
+            // Extents width BD
+            let _extents_width = reader.read_bit_double();
+            // Extents height BD
+            let _extents_height = reader.read_bit_double();
+            // ── END redundant fields ──
+
+            // Column type BS 71: 0 = none, 1 = static, 2 = dynamic
+            column_type = reader.read_bit_short();
+            if column_type != 0 {
+                // Column height count BL 72
+                column_count = safe_count(reader.read_bit_long());
+                // Column width BD 44
+                column_width = reader.read_bit_double();
+                // Gutter BD 45
+                column_gutter = reader.read_bit_double();
+                // Auto height? B 73
+                column_auto_height = reader.read_bit();
+                // Flow reversed? B 74
+                column_flow_reversed = reader.read_bit();
+
+                // Per-column heights only for dynamic, non-auto-height columns.
+                if !column_auto_height && column_type == 2 && column_count > 0 {
+                    column_heights.reserve(column_count as usize);
+                    for _ in 0..column_count {
+                        // Column height BD 46
+                        column_heights.push(reader.read_bit_double());
+                    }
+                }
+            }
+        }
     }
 
     MTextData {
         insertion_point, normal, x_direction, rectangle_width, rectangle_height,
         height, attachment_point, drawing_direction, extents_height, extents_width,
         value, style_handle, linespacing_style, linespacing_factor, unknown_bit,
-        background_flags,
+        background_flags, background_scale, background_color, background_transparency,
+        is_annotative, column_type, column_count, column_flow_reversed,
+        column_auto_height, column_width, column_gutter, column_heights,
     }
 }
 

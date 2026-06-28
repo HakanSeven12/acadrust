@@ -1882,6 +1882,162 @@ fn dwg_version_matrix_mtext() {
     }
 }
 
+// ── DWG: MTEXT background fill + columns roundtrip ─────────────────────
+//
+// These lock in the conditional background-fill block (BD scale / CMC color /
+// BL transparency, gated on flag 0x01 or the R2018+ text-frame bit 0x10) and
+// the R2018+ non-annotative column block. A regression in either desyncs the
+// object stream, so the entity must survive byte-for-byte.
+
+/// Round-trip `mtext` through DWG at `version` and return the recovered MTEXT.
+/// Extracts the entity directly rather than asserting on `entity_count()`,
+/// which also counts the model/paper-space block markers.
+fn dwg_roundtrip_mtext(version: DxfVersion, mtext: MText) -> MText {
+    let doc = build_minimal_document(version, EntityType::MText(mtext));
+    let rt = dwg_roundtrip(&doc);
+    let found = rt.entities().find_map(|e| match e {
+        EntityType::MText(m) => Some(m.clone()),
+        _ => None,
+    });
+    found.expect("MTEXT missing after DWG roundtrip")
+}
+
+#[test]
+fn dwg_mtext_background_fill_r2018() {
+    let mut mtext = MText::with_value("Background fill", Vector3::new(1.0, 2.0, 0.0));
+    mtext.height = 2.5;
+    mtext.rectangle_width = 20.0;
+    // UseBackgroundFillColor
+    mtext.background_fill_flags = 0x01;
+    mtext.background_scale = 1.75;
+    mtext.background_color = Color::from_index(1); // red, indexed (round-trips via CMC)
+    mtext.background_transparency = 0;
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1032, mtext.clone());
+    assert_eq!(rt.background_fill_flags, 0x01, "R2018 background flags");
+    assert_eq!(rt.background_scale, 1.75, "R2018 background scale");
+    assert_eq!(rt.background_color, Color::from_index(1), "R2018 background color");
+    assert_eq!(rt.background_transparency, 0, "R2018 background transparency");
+    assert_eq!(rt.value, "Background fill", "R2018 value desynced");
+    assert_eq!(rt.height, 2.5, "R2018 height desynced");
+}
+
+#[test]
+fn dwg_mtext_background_fill_r2004() {
+    let mut mtext = MText::with_value("BG R2004", Vector3::new(0.0, 0.0, 0.0));
+    mtext.background_fill_flags = 0x01;
+    mtext.background_scale = 1.5;
+    mtext.background_color = Color::from_index(3); // green
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1018, mtext.clone());
+    assert_eq!(rt.background_fill_flags, 0x01, "R2004 background flags");
+    assert_eq!(rt.background_scale, 1.5, "R2004 background scale");
+    assert_eq!(rt.background_color, Color::from_index(3), "R2004 background color");
+    assert_eq!(rt.value, "BG R2004", "R2004 value desynced");
+}
+
+#[test]
+fn dwg_mtext_background_fill_byblock_r2018() {
+    // ByBlock is encoded as a distinct CMC method; make sure it survives the
+    // background-color round-trip rather than degrading to an indexed color.
+    let mut mtext = MText::with_value("BG byblock", Vector3::new(0.0, 0.0, 0.0));
+    mtext.background_fill_flags = 0x01;
+    mtext.background_scale = 1.5;
+    mtext.background_color = Color::ByBlock;
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1032, mtext.clone());
+    assert_eq!(rt.background_fill_flags, 0x01, "byblock flags");
+    assert_eq!(rt.background_color, Color::ByBlock, "byblock color desynced");
+    assert_eq!(rt.value, "BG byblock", "byblock value desynced");
+}
+
+#[test]
+fn dwg_mtext_text_frame_r2018() {
+    // The text-frame bit (0x10) alone triggers the fill block only for R2018+.
+    let mut mtext = MText::with_value("Framed", Vector3::new(0.0, 0.0, 0.0));
+    mtext.background_fill_flags = 0x10; // TextFrame, no fill color bit
+    mtext.background_scale = 2.0;
+    mtext.background_color = Color::from_index(5); // blue
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1032, mtext.clone());
+    assert_eq!(rt.background_fill_flags, 0x10, "R2018 text-frame flag");
+    assert_eq!(rt.background_scale, 2.0, "R2018 text-frame scale");
+    assert_eq!(rt.background_color, Color::from_index(5), "R2018 text-frame color");
+    assert_eq!(rt.value, "Framed", "R2018 text-frame value desynced");
+}
+
+#[test]
+fn dwg_mtext_text_frame_r2004_not_stored() {
+    // At R2004 the text-frame bit (0x10) does NOT trigger the fill block, so the
+    // flag survives but the scale/color are not persisted (stay at defaults).
+    // This locks in the version-gated read/write condition.
+    let mut mtext = MText::with_value("Framed04", Vector3::new(0.0, 0.0, 0.0));
+    mtext.background_fill_flags = 0x10; // TextFrame only
+    mtext.background_scale = 9.0; // would be lost: no block written at R2004
+    mtext.background_color = Color::from_index(5);
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1018, mtext.clone());
+    assert_eq!(rt.background_fill_flags, 0x10, "R2004 text-frame flag survives");
+    // No fill block at R2004 → scale/color come back as the reader defaults.
+    assert_eq!(rt.background_scale, 1.5, "R2004 text-frame scale not stored");
+    assert_eq!(rt.background_color, Color::ByLayer, "R2004 text-frame color not stored");
+    assert_eq!(rt.value, "Framed04", "R2004 text-frame value desynced");
+}
+
+#[test]
+fn dwg_mtext_dynamic_columns_r2018() {
+    let mut mtext = MText::with_value("Columns", Vector3::new(0.0, 0.0, 0.0));
+    mtext.is_annotative = false;
+    mtext.column_data = MTextColumnData {
+        column_type: 2, // dynamic
+        column_count: 2,
+        flow_reversed: true,
+        auto_height: false,
+        width: 50.0,
+        gutter: 5.0,
+        heights: vec![30.0, 40.0],
+    };
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1032, mtext.clone());
+    assert!(!rt.is_annotative, "R2018 annotative flag desynced");
+    assert_eq!(rt.column_data, mtext.column_data, "R2018 column data desynced");
+    assert_eq!(rt.value, "Columns", "R2018 columns value desynced");
+}
+
+#[test]
+fn dwg_mtext_static_columns_r2018() {
+    let mut mtext = MText::with_value("Static cols", Vector3::new(0.0, 0.0, 0.0));
+    mtext.is_annotative = false;
+    mtext.column_data = MTextColumnData {
+        column_type: 1, // static
+        column_count: 3,
+        flow_reversed: false,
+        auto_height: true,
+        width: 25.0,
+        gutter: 2.5,
+        heights: vec![], // static columns store no per-column heights
+    };
+
+    let rt = dwg_roundtrip_mtext(DxfVersion::AC1032, mtext.clone());
+    assert!(!rt.is_annotative, "R2018 static annotative flag desynced");
+    assert_eq!(rt.column_data, mtext.column_data, "R2018 static column data desynced");
+}
+
+#[test]
+fn dwg_mtext_background_no_regression_all_versions() {
+    // A plain MTEXT (no fill, annotative) must still round-trip its core data
+    // on every supported version after the background/column changes.
+    for &(version, label) in DWG_VERSIONS {
+        let mut mtext = MText::with_value("Plain", Vector3::new(7.0, 8.0, 0.0));
+        mtext.height = 3.0;
+        let rt = dwg_roundtrip_mtext(version, mtext);
+        assert_eq!(rt.value, "Plain", "DWG {} plain MTEXT value desynced", label);
+        assert_eq!(rt.height, 3.0, "DWG {} plain MTEXT height desynced", label);
+        assert_eq!(rt.background_fill_flags, 0, "DWG {} plain MTEXT spurious flags", label);
+        assert!(rt.is_annotative, "DWG {} plain MTEXT annotative flag", label);
+    }
+}
+
 #[test]
 fn dwg_version_matrix_lwpolyline() {
     for &(version, label) in DWG_VERSIONS {

@@ -67,7 +67,7 @@ pub use polyline::{Polyline, Polyline2D, Vertex2D, Vertex3D, PolylineFlags, Vert
 pub use polyline3d::{Polyline3D, Vertex3DPolyline, Polyline3DFlags};
 pub use lwpolyline::{LwPolyline, LwVertex};
 pub use text::{Text, TextHorizontalAlignment, TextVerticalAlignment};
-pub use mtext::{MText, AttachmentPoint, DrawingDirection};
+pub use mtext::{MText, MTextColumnData, AttachmentPoint, DrawingDirection};
 pub use spline::{Spline, SplineFlags};
 pub use dimension::*;
 pub use hatch::*;

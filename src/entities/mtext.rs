@@ -39,6 +39,50 @@ pub enum DrawingDirection {
     ByStyle = 3,
 }
 
+/// Column layout for an [`MText`] entity (stored in R2018+ DWG, non-annotative).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct MTextColumnData {
+    /// Column type: 0 = no columns, 1 = static columns, 2 = dynamic columns.
+    pub column_type: i16,
+    /// Number of columns. For dynamic, non-auto-height columns this is the
+    /// number of per-column [`heights`](Self::heights); the DWG writer derives
+    /// the on-disk count from `heights.len()` in that case to keep the object
+    /// stream in sync, so keep the two consistent for dynamic columns.
+    pub column_count: i32,
+    /// Whether the column flow is reversed.
+    pub flow_reversed: bool,
+    /// Whether the column height is computed automatically.
+    pub auto_height: bool,
+    /// Column width.
+    pub width: f64,
+    /// Gutter width between columns.
+    pub gutter: f64,
+    /// Per-column heights. Only stored for dynamic, non-auto-height columns.
+    pub heights: Vec<f64>,
+}
+
+impl MTextColumnData {
+    /// Create empty (no-columns) column data.
+    pub fn new() -> Self {
+        MTextColumnData {
+            column_type: 0,
+            column_count: 0,
+            flow_reversed: false,
+            auto_height: false,
+            width: 0.0,
+            gutter: 0.0,
+            heights: Vec::new(),
+        }
+    }
+}
+
+impl Default for MTextColumnData {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A multi-line text entity
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -67,6 +111,20 @@ pub struct MText {
     pub line_spacing_factor: f64,
     /// Normal vector
     pub normal: Vector3,
+    /// Background fill flags (BL 90): bit 0x01 = use background fill color,
+    /// 0x02 = use drawing window color, 0x10 = text frame (R2018+).
+    pub background_fill_flags: i32,
+    /// Background fill scale factor (BD 45). Default 1.5.
+    pub background_scale: f64,
+    /// Background fill color (CMC 63).
+    pub background_color: Color,
+    /// Background fill transparency (BL 441).
+    pub background_transparency: i32,
+    /// Whether this MTEXT is annotative (R2018+). When `false`, the DWG stores
+    /// a block of redundant fields followed by column data.
+    pub is_annotative: bool,
+    /// Column layout data (R2018+).
+    pub column_data: MTextColumnData,
 }
 
 impl MText {
@@ -85,6 +143,12 @@ impl MText {
             drawing_direction: DrawingDirection::LeftToRight,
             line_spacing_factor: 1.0,
             normal: Vector3::UNIT_Z,
+            background_fill_flags: 0,
+            background_scale: 1.5,
+            background_color: Color::ByLayer,
+            background_transparency: 0,
+            is_annotative: true,
+            column_data: MTextColumnData::new(),
         }
     }
 

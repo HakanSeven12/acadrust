@@ -394,14 +394,91 @@ impl<'a> DwgObjectWriter<'a> {
         // R2004+:
         if self.version.r2004_plus() {
             // Background flags BL 90 (0 = no background)
-            self.writer.write_bit_long(0);
+            self.writer.write_bit_long(e.background_fill_flags);
+
+            // The background-fill block is written when the UseBackgroundFillColor
+            // bit (0x01) is set, or — for R2018+ — when the TextFrame bit (0x10)
+            // is set. Mirrors read_mtext.
+            if (e.background_fill_flags & 0x01) != 0
+                || (self.version.r2018_plus(self.dxf_version)
+                    && (e.background_fill_flags & 0x10) != 0)
+            {
+                // Background scale factor BD 45
+                self.writer.write_bit_double(e.background_scale);
+                // Background color CMC 63
+                self.writer.write_cm_color(&e.background_color);
+                // Background transparency BL 441
+                self.writer.write_bit_long(e.background_transparency);
+            }
         }
 
         // R2018+:
         if self.version.r2018_plus(self.dxf_version) {
             // Is NOT annotative B
-            // Write false = "it IS annotative" = skip redundant fields
-            self.writer.write_bit(false);
+            self.writer.write_bit(!e.is_annotative);
+
+            // IF MTEXT is not annotative: redundant fields + column data.
+            if !e.is_annotative {
+                // Version BS (default 0; AcadSharp emits 4)
+                self.writer.write_bit_short(4);
+                // Default flag B (default true)
+                self.writer.write_bit(true);
+                // Registered application H (null hard pointer)
+                self.writer
+                    .write_handle(DwgReferenceType::HardPointer, 0);
+
+                // ── BEGIN redundant fields (discarded on read) ──
+                // Attachment point BL
+                self.writer.write_bit_long(e.attachment_point as i32);
+                // X-axis dir 3BD
+                let x_dir_redundant =
+                    Vector3::new(e.rotation.cos(), e.rotation.sin(), 0.0);
+                self.writer.write_3bit_double(x_dir_redundant);
+                // Insertion point 3BD
+                self.writer.write_3bit_double(e.insertion_point);
+                // Rect width BD
+                self.writer.write_bit_double(e.rectangle_width);
+                // Rect height BD
+                self.writer
+                    .write_bit_double(e.rectangle_height.unwrap_or(0.0));
+                // Extents width BD
+                self.writer.write_bit_double(0.0);
+                // Extents height BD
+                self.writer.write_bit_double(0.0);
+                // ── END redundant fields ──
+
+                let col = &e.column_data;
+                // Column type BS 71
+                self.writer.write_bit_short(col.column_type);
+                if col.column_type != 0 {
+                    // Column height count BL 72. For dynamic, non-auto-height
+                    // columns the reader consumes exactly this many height
+                    // doubles, so it must match the number we emit below.
+                    let has_heights = col.column_type == 2 && !col.auto_height;
+                    let height_count = if has_heights {
+                        col.heights.len() as i32
+                    } else {
+                        col.column_count
+                    };
+                    self.writer.write_bit_long(height_count);
+                    // Column width BD 44
+                    self.writer.write_bit_double(col.width);
+                    // Gutter BD 45
+                    self.writer.write_bit_double(col.gutter);
+                    // Auto height? B 73
+                    self.writer.write_bit(col.auto_height);
+                    // Flow reversed? B 74
+                    self.writer.write_bit(col.flow_reversed);
+
+                    // Per-column heights only for dynamic, non-auto columns.
+                    if !col.auto_height && col.column_type == 2 {
+                        for h in &col.heights {
+                            // Column height BD 46
+                            self.writer.write_bit_double(*h);
+                        }
+                    }
+                }
+            }
         }
 
         self.register_object(e.common.handle);

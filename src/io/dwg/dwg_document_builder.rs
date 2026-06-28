@@ -1301,6 +1301,20 @@ impl DwgDocumentBuilder {
                     // Compute rotation from x_direction vector
                     e.rotation = data.x_direction.y.atan2(data.x_direction.x);
                     e.line_spacing_factor = data.linespacing_factor;
+                    e.background_fill_flags = data.background_flags;
+                    e.background_scale = data.background_scale;
+                    e.background_color = data.background_color;
+                    e.background_transparency = data.background_transparency;
+                    e.is_annotative = data.is_annotative;
+                    e.column_data = MTextColumnData {
+                        column_type: data.column_type,
+                        column_count: data.column_count,
+                        flow_reversed: data.column_flow_reversed,
+                        auto_height: data.column_auto_height,
+                        width: data.column_width,
+                        gutter: data.column_gutter,
+                        heights: data.column_heights,
+                    };
                     e.style = maps.style_name(data.style_handle);
                     let _ = document.add_entity(EntityType::MText(e));
                 },

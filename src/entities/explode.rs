@@ -441,6 +441,7 @@ fn explode_multileader(ml: &MultiLeader) -> Vec<EntityType> {
             drawing_direction: DrawingDirection::LeftToRight,
             line_spacing_factor: ml.context.line_spacing_factor,
             normal: ml.context.text_normal,
+            ..MText::new()
         };
         result.push(EntityType::MText(text));
     }
