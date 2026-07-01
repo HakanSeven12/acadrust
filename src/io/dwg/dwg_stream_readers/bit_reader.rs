@@ -794,10 +794,24 @@ impl DwgBitReader {
             if size != 0 {
                 let flags = (size as u16) & 0xFF00;
 
-                // 0x4000: AcDbColor handle reference (handle section)
+                // 0x4000: AcDbColor handle reference (read from the handle
+                // section by the caller). When present, NO rgb value follows
+                // in the data stream.
                 let is_book_color = (flags & 0x4000) > 0;
 
-                let color = if (flags & 0x8000) > 0 {
+                // 0x2000: transparency (BL) — read BEFORE the color-book
+                // handle / rgb, matching the entity ENC field order.
+                if (flags & 0x2000) > 0 {
+                    let value = self.read_bit_long();
+                    transparency = Transparency::from_alpha_value(value as u32);
+                }
+
+                // A true/complex color rgb (BL) is present ONLY when the color
+                // is not a book-color reference (0x4000) but has the 0x8000
+                // flag. A book color carries its rgb via the handle instead.
+                let color = if is_book_color {
+                    Color::from_index((size & 0x0FFF) as i16)
+                } else if (flags & 0x8000) > 0 {
                     // Complex/true color BL follows in main stream.
                     // The BL uses the same packed format as CMC:
                     //   0xC0000000 = ByLayer, flag byte bit 0 set = ACI index,
@@ -817,12 +831,6 @@ impl DwgBitReader {
                     // ACI color index (lower 12 bits)
                     Color::from_index((size & 0x0FFF) as i16)
                 };
-
-                // 0x2000: transparency follows
-                if (flags & 0x2000) > 0 {
-                    let value = self.read_bit_long();
-                    transparency = Transparency::from_alpha_value(value as u32);
-                }
 
                 (color, transparency, is_book_color)
             } else {

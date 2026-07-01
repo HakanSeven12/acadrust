@@ -700,14 +700,15 @@ impl DwgBitWriter {
         let is_true_color = matches!(color, Color::Rgb { .. });
         let has_transparency = !transparency.is_opaque();
 
-        if is_true_color || is_book_color {
+        // A book color carries its rgb through the AcDbColor handle (0x4000);
+        // the true-color rgb value (0x8000) is only present otherwise.
+        if is_book_color {
+            flags |= 0x4000; // AcDbColor reference (handle written separately)
+        } else if is_true_color {
             flags |= 0x8000; // Complex/true color follows
         }
         if has_transparency {
             flags |= 0x2000; // Transparency follows
-        }
-        if is_book_color {
-            flags |= 0x4000; // AcDbColor reference
         }
 
         if !is_true_color && !is_book_color {
@@ -718,8 +719,14 @@ impl DwgBitWriter {
 
         self.write_bit_short(flags as i16);
 
-        // Write true color BL if flagged
-        if is_true_color || is_book_color {
+        // Field order matches the entity ENC encoding: transparency BL first,
+        // then the true-color rgb (book colors emit neither — the rgb comes
+        // from the AcDbColor handle).
+        if has_transparency {
+            self.write_bit_long(transparency.to_alpha_value());
+        }
+
+        if is_true_color && !is_book_color {
             let color_long = match color {
                 Color::Rgb { r, g, b } => {
                     (*b as u32) | ((*g as u32) << 8) | ((*r as u32) << 16) | (0xC2u32 << 24)
@@ -731,11 +738,6 @@ impl DwgBitWriter {
                 Color::ByBlock => 0xC3u32 << 24,
             };
             self.write_bit_long(color_long as i32);
-        }
-
-        // Write transparency BL if flagged
-        if has_transparency {
-            self.write_bit_long(transparency.to_alpha_value());
         }
     }
 
