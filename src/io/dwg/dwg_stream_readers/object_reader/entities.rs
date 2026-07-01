@@ -1188,6 +1188,9 @@ pub struct AttributeCommonData {
     pub att_version: u8,
     pub att_type: u8,
     pub tag: String,
+    /// ATTDEF prompt string. Empty for ATTRIB entities (the stream carries no
+    /// prompt for an attribute instance — it lives on the definition).
+    pub prompt: String,
     pub field_length: i16,
     pub flags: u8,
     pub lock_position: bool,
@@ -1775,9 +1778,9 @@ pub fn read_attribute_definition(reader: &mut DwgMergedReader, version: DwgVersi
     if version.r2010_plus() {
         let _version2 = reader.read_byte();
     }
-    let _prompt = reader.read_variable_text();
+    let prompt = reader.read_variable_text();
 
-    AttributeCommonData { text_data, att_version, att_type, tag, field_length, flags, lock_position }
+    AttributeCommonData { text_data, att_version, att_type, tag, prompt, field_length, flags, lock_position }
 }
 
 pub fn read_attribute_entity(reader: &mut DwgMergedReader, version: DwgVersion, dxf_version: DxfVersion) -> AttributeCommonData {
@@ -1792,7 +1795,9 @@ pub fn read_attribute_entity(reader: &mut DwgMergedReader, version: DwgVersion, 
     let flags = reader.read_byte();
     let lock_position = if version.r2007_plus() { reader.read_bit() } else { false };
 
-    AttributeCommonData { text_data, att_version, att_type, tag, field_length, flags, lock_position }
+    // An ATTRIB instance carries no prompt in the stream — that lives on the
+    // ATTDEF. Keep it empty so the shared struct stays consistent.
+    AttributeCommonData { text_data, att_version, att_type, tag, prompt: String::new(), field_length, flags, lock_position }
 }
 
 // ════════════════════════════════════════════════════════════════════════

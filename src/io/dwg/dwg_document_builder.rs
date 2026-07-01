@@ -1794,7 +1794,7 @@ impl DwgDocumentBuilder {
                     );
                     let mut e = AttributeDefinition::new(
                         data.tag.clone(),
-                        String::new(), // prompt (consumed by reader, not returned separately)
+                        data.prompt.clone(),
                         data.text_data.value.clone(),
                     );
                     e.common = entity_common;
