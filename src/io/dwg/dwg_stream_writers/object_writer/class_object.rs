@@ -771,13 +771,16 @@ impl<'a> DwgObjectWriter<'a> {
                 self.writer.write_bit_long(value.status_flags);
                 self.writer.write_variable_text(&value.update_status);
                 self.writer.write_bit_long(value.custom_data.len() as i32);
+                // The connected objects (the tables the link feeds) are
+                // pointers: they belong to their own block records.
                 for item in &value.custom_data {
                     self.writer
-                        .write_handle(DwgReferenceType::HardOwnership, item.target.value());
-                    self.writer.write_variable_text(&item.value);
+                        .write_handle(DwgReferenceType::SoftPointer, item.target.value());
                 }
                 self.writer
                     .write_handle(DwgReferenceType::HardOwnership, value.hard_owner.value());
+                // The (empty) custom data map.
+                self.writer.write_bit_long(0);
             }
             ClassObjectData::PersistentSubentityManager(value) => {
                 self.writer.write_bit_long(value.class_version);
