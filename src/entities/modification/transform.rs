@@ -233,8 +233,16 @@ pub(crate) fn transform_polyline2d(e: &mut Polyline2D, transform: &Transform) {
     // normal's OCS.
     let new_normal = transform.apply_rotation(e.normal).normalize();
     let (ocs, new_t) = ocs_pair(e.normal, new_normal);
+    // Widths are lengths in the plane: SCALE 2 makes the band twice as wide.
+    let scale_factor = transform
+        .apply_rotation(Vector3::new(1.0, 0.0, 0.0))
+        .length();
+    e.start_width *= scale_factor;
+    e.end_width *= scale_factor;
     for vertex in &mut e.vertices {
         vertex.location = new_t * transform.apply(ocs * vertex.location);
+        vertex.start_width *= scale_factor;
+        vertex.end_width *= scale_factor;
         if flip {
             // Bulge encodes the arc's side/direction in the plane; a
             // reflection reverses it.
@@ -268,11 +276,18 @@ pub(crate) fn transform_lwpolyline(e: &mut LwPolyline, transform: &Transform) {
     // the shared elevation field.
     let plane_origin = new_t * transform.apply(ocs * Vector3::new(0.0, 0.0, e.elevation));
     let new_elevation = plane_origin.z;
+    // Widths are lengths in the plane: SCALE 2 makes the band twice as wide.
+    let scale_factor = transform
+        .apply_rotation(Vector3::new(1.0, 0.0, 0.0))
+        .length();
+    e.constant_width *= scale_factor;
     for vertex in &mut e.vertices {
         let pt3d = Vector3::new(vertex.location.x, vertex.location.y, e.elevation);
         let l = new_t * transform.apply(ocs * pt3d);
         vertex.location.x = l.x;
         vertex.location.y = l.y;
+        vertex.start_width *= scale_factor;
+        vertex.end_width *= scale_factor;
         if flip {
             // Bulge encodes the arc's side/direction in the plane; a
             // reflection reverses it. Without this, exploding a mirrored
@@ -1821,6 +1836,61 @@ mod tests {
         );
         assert!((b.vertices[0].bulge - 0.5).abs() < 1e-12);
         assert!((b.vertices[1].bulge - (-0.3)).abs() < 1e-12);
+    }
+
+    // SCALE in AutoCAD scales polyline widths with the geometry: constant
+    // width (43), vertex start/end widths (40/41) and the 2D polyline's
+    // default widths. Rotation and reflection keep them.
+    #[test]
+    fn test_transform_scales_polyline_widths() {
+        let mut lw = LwPolyline::new();
+        lw.constant_width = 1.0;
+        let mut v0 = LwVertex::new(crate::types::Vector2::new(0.0, 0.0));
+        v0.start_width = 0.5;
+        v0.end_width = 2.0;
+        lw.add_vertex(v0);
+        lw.add_vertex(LwVertex::new(crate::types::Vector2::new(10.0, 0.0)));
+
+        let mut pl = Polyline2D::new();
+        pl.start_width = 1.0;
+        pl.end_width = 1.5;
+        let mut w0 = Vertex2D::new(Vector3::new(0.0, 0.0, 0.0));
+        w0.start_width = 0.5;
+        w0.end_width = 3.0;
+        pl.add_vertex(w0);
+        pl.add_vertex(Vertex2D::new(Vector3::new(10.0, 0.0, 0.0)));
+
+        let widths = |lw: &LwPolyline, pl: &Polyline2D| {
+            [
+                lw.constant_width,
+                lw.vertices[0].start_width,
+                lw.vertices[0].end_width,
+                pl.start_width,
+                pl.end_width,
+                pl.vertices[0].start_width,
+                pl.vertices[0].end_width,
+            ]
+        };
+        let original = widths(&lw, &pl);
+        let cases = [
+            (Transform::from_scale(2.0), 2.0),
+            (
+                Transform::from_rotation(Vector3::new(0.0, 0.0, 1.0), 1.0),
+                1.0,
+            ),
+            (Transform::from_scaling(Vector3::new(-1.0, 1.0, 1.0)), 1.0),
+        ];
+        for (t, factor) in cases {
+            let (mut a, mut b) = (lw.clone(), pl.clone());
+            transform_lwpolyline(&mut a, &t);
+            transform_polyline2d(&mut b, &t);
+            for (got, was) in widths(&a, &b).iter().zip(original) {
+                assert!(
+                    (got - was * factor).abs() < 1e-12,
+                    "{got} != {was} * {factor}"
+                );
+            }
+        }
     }
 
     #[test]
