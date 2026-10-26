@@ -3533,7 +3533,9 @@ impl<'a> DwgObjectWriter<'a> {
         for data in &cell.custom_data_items {
             self.write_table_custom_data(data);
         }
-        self.writer.write_bit_long(cell.has_linked_data as i32);
+        // Linked-data flags: the anchor of a linked range is stored as 3.
+        self.writer
+            .write_bit_long(if cell.has_linked_data { 3 } else { 0 });
         if cell.has_linked_data {
             self.writer.write_handle(
                 DwgReferenceType::HardPointer,

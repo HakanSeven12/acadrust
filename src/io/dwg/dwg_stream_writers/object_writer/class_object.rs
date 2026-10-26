@@ -779,8 +779,6 @@ impl<'a> DwgObjectWriter<'a> {
                 }
                 self.writer
                     .write_handle(DwgReferenceType::HardOwnership, value.hard_owner.value());
-                // The (empty) custom data map.
-                self.writer.write_bit_long(0);
             }
             ClassObjectData::PersistentSubentityManager(value) => {
                 self.writer.write_bit_long(value.class_version);
