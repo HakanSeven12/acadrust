@@ -2710,73 +2710,6 @@ impl DwgDocumentBuilder {
             document.header.handle_seed = max_from_reader + 1;
         }
 
-        // BLOCK/ENDBLK markers are structural records and are not retained in
-        // the flat entity arena. Damaged files can point a block record at a
-        // handle now occupied by a table entry or ordinary object (0718 uses
-        // its Standard DIMSTYLE as *Paper_Space's BLOCK marker). Rehome only
-        // those colliding markers; the writer will synthesize their records.
-        let mut occupied: std::collections::HashSet<Handle> =
-            document.objects.keys().copied().collect();
-        occupied.extend(document.entities().filter_map(|entity| {
-            (!matches!(
-                entity,
-                crate::entities::EntityType::Block(_) | crate::entities::EntityType::BlockEnd(_)
-            ))
-            .then_some(entity.common().handle)
-        }));
-        for handle in [
-            document.block_records.handle(),
-            document.layers.handle(),
-            document.text_styles.handle(),
-            document.line_types.handle(),
-            document.views.handle(),
-            document.ucss.handle(),
-            document.vports.handle(),
-            document.app_ids.handle(),
-            document.dim_styles.handle(),
-            document.vx_table.handle(),
-        ] {
-            occupied.insert(handle);
-        }
-        occupied.extend(document.block_records.iter().map(|record| record.handle));
-        occupied.extend(document.layers.iter().map(|entry| entry.handle));
-        occupied.extend(document.text_styles.iter().map(|entry| entry.handle));
-        occupied.extend(document.line_types.iter().map(|entry| entry.handle));
-        occupied.extend(document.views.iter().map(|entry| entry.handle));
-        occupied.extend(document.ucss.iter().map(|entry| entry.handle));
-        occupied.extend(document.vports.iter().map(|entry| entry.handle));
-        occupied.extend(document.app_ids.iter().map(|entry| entry.handle));
-        occupied.extend(document.dim_styles.iter().map(|entry| entry.handle));
-        occupied.extend(document.vx_table.iter().map(|entry| entry.handle));
-        fn allocate_marker(
-            occupied: &mut std::collections::HashSet<Handle>,
-            next_handle: &mut u64,
-        ) -> Handle {
-            while occupied.contains(&Handle::new(*next_handle)) {
-                *next_handle += 1;
-            }
-            let handle = Handle::new(*next_handle);
-            *next_handle += 1;
-            occupied.insert(handle);
-            handle
-        }
-        let mut next_handle = document.header.handle_seed.max(1);
-        for record in document.block_records.iter_mut() {
-            if record.block_entity_handle.is_null()
-                || occupied.contains(&record.block_entity_handle)
-            {
-                record.block_entity_handle = allocate_marker(&mut occupied, &mut next_handle);
-            } else {
-                occupied.insert(record.block_entity_handle);
-            }
-            if record.block_end_handle.is_null() || occupied.contains(&record.block_end_handle) {
-                record.block_end_handle = allocate_marker(&mut occupied, &mut next_handle);
-            } else {
-                occupied.insert(record.block_end_handle);
-            }
-        }
-        document.header.handle_seed = document.header.handle_seed.max(next_handle);
-
         // ── Post-pass: Resolve root dictionary handle ──────────────────
         //
         // The DWG header often stores dictionary handles as relative
@@ -3509,6 +3442,77 @@ impl DwgDocumentBuilder {
                 }
             }
         }
+
+        // Runs after the handle-collision repair: a default entry seeded at a
+        // low handle before the file was read (the ACAD APPID, Standard
+        // styles) is moved off a source handle there, so it no longer looks
+        // like it occupies the file's own BLOCK/ENDBLK marker (acadrust #136).
+        // BLOCK/ENDBLK markers are structural records and are not retained in
+        // the flat entity arena. Damaged files can point a block record at a
+        // handle now occupied by a table entry or ordinary object (0718 uses
+        // its Standard DIMSTYLE as *Paper_Space's BLOCK marker). Rehome only
+        // those colliding markers; the writer will synthesize their records.
+        let mut occupied: std::collections::HashSet<Handle> =
+            document.objects.keys().copied().collect();
+        occupied.extend(document.entities().filter_map(|entity| {
+            (!matches!(
+                entity,
+                crate::entities::EntityType::Block(_) | crate::entities::EntityType::BlockEnd(_)
+            ))
+            .then_some(entity.common().handle)
+        }));
+        for handle in [
+            document.block_records.handle(),
+            document.layers.handle(),
+            document.text_styles.handle(),
+            document.line_types.handle(),
+            document.views.handle(),
+            document.ucss.handle(),
+            document.vports.handle(),
+            document.app_ids.handle(),
+            document.dim_styles.handle(),
+            document.vx_table.handle(),
+        ] {
+            occupied.insert(handle);
+        }
+        occupied.extend(document.block_records.iter().map(|record| record.handle));
+        occupied.extend(document.layers.iter().map(|entry| entry.handle));
+        occupied.extend(document.text_styles.iter().map(|entry| entry.handle));
+        occupied.extend(document.line_types.iter().map(|entry| entry.handle));
+        occupied.extend(document.views.iter().map(|entry| entry.handle));
+        occupied.extend(document.ucss.iter().map(|entry| entry.handle));
+        occupied.extend(document.vports.iter().map(|entry| entry.handle));
+        occupied.extend(document.app_ids.iter().map(|entry| entry.handle));
+        occupied.extend(document.dim_styles.iter().map(|entry| entry.handle));
+        occupied.extend(document.vx_table.iter().map(|entry| entry.handle));
+        fn allocate_marker(
+            occupied: &mut std::collections::HashSet<Handle>,
+            next_handle: &mut u64,
+        ) -> Handle {
+            while occupied.contains(&Handle::new(*next_handle)) {
+                *next_handle += 1;
+            }
+            let handle = Handle::new(*next_handle);
+            *next_handle += 1;
+            occupied.insert(handle);
+            handle
+        }
+        let mut next_handle = document.header.handle_seed.max(1);
+        for record in document.block_records.iter_mut() {
+            if record.block_entity_handle.is_null()
+                || occupied.contains(&record.block_entity_handle)
+            {
+                record.block_entity_handle = allocate_marker(&mut occupied, &mut next_handle);
+            } else {
+                occupied.insert(record.block_entity_handle);
+            }
+            if record.block_end_handle.is_null() || occupied.contains(&record.block_end_handle) {
+                record.block_end_handle = allocate_marker(&mut occupied, &mut next_handle);
+            } else {
+                occupied.insert(record.block_end_handle);
+            }
+        }
+        document.header.handle_seed = document.header.handle_seed.max(next_handle);
 
         document.header.current_layer_name = document
             .layers
