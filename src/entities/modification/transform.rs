@@ -380,7 +380,12 @@ pub(crate) fn transform_mtext(e: &mut MText, transform: &Transform) {
         *h *= scale_factor;
     }
     let new_normal = transform.apply_rotation(old_normal).normalize();
-    let direction = transform.apply_rotation(old_direction);
+    // The x-axis direction is a unit vector: AutoCAD's AUDIT rejects an MTEXT
+    // whose direction carries the scale factor.
+    let mut direction = transform.apply_rotation(old_direction);
+    if direction.length() > 1e-12 {
+        direction = direction.normalize();
+    }
     e.normal = new_normal;
     e.dwg_x_direction = Some(direction);
     if direction.x.abs() > 1e-12 || direction.y.abs() > 1e-12 {
@@ -957,14 +962,16 @@ pub(crate) fn transform_insert(e: &mut Insert, transform: &Transform) {
     // uniform parent scale grows with its geometry (AutoCAD doubles a 10-unit
     // spacing under a 2x parent).  A scalar spacing cannot encode shear, so
     // retain the transformed vector length, which is the closest representable
-    // INSERT spacing and is exact for similarity transforms.
+    // INSERT spacing and is exact for similarity transforms.  The sign comes
+    // from the new local axes, as for the scale factors above: a negative
+    // spacing (an array running along -X or -Y) keeps running that way.
     if e.column_spacing != 0.0 {
         let v = transformation * (trans_ow * Vector3::new(e.column_spacing, 0.0, 0.0));
-        e.column_spacing = v.length();
+        e.column_spacing = v.length().copysign((trans_wo_rot * v).x);
     }
     if e.row_spacing != 0.0 {
         let v = transformation * (trans_ow * Vector3::new(0.0, e.row_spacing, 0.0));
-        e.row_spacing = v.length();
+        e.row_spacing = v.length().copysign((trans_wo_rot * v).y);
     }
 
     let clamp = |val: f64| -> f64 {
@@ -1905,5 +1912,46 @@ mod tests {
         assert_eq!(ml.context.block_content_scale, Vector3::new(2.0, 2.0, 2.0));
         // AutoCAD keeps the entity-level block scale override.
         assert_eq!(ml.block_scale, Vector3::new(1.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn test_transform_mtext_keeps_a_unit_direction() {
+        let mut m = MText::new();
+        m.insertion_point = Vector3::new(0.0, 20.0, 0.0);
+        m.height = 2.5;
+        m.dwg_x_direction = Some(Vector3::UNIT_X);
+
+        // SCALE 2 about the origin: height doubles, the direction stays (1, 0, 0).
+        transform_mtext(&mut m, &Transform::from_scale(2.0));
+        assert!((m.height - 5.0).abs() < 1e-10);
+        assert_vector_near(m.dwg_x_direction.unwrap(), Vector3::UNIT_X);
+
+        transform_mtext(
+            &mut m,
+            &Transform::from_rotation(Vector3::UNIT_Z, std::f64::consts::FRAC_PI_2)
+                .then(&Transform::from_scale(3.0)),
+        );
+        assert_vector_near(m.dwg_x_direction.unwrap(), Vector3::UNIT_Y);
+    }
+
+    #[test]
+    fn test_transform_minsert_keeps_negative_spacing_direction() {
+        // Two columns 2 apart and two rows 3 apart, both running along -X / -Y.
+        let source = Insert::new("B", Vector3::new(1.0, 1.0, 0.0)).with_array(2, 2, -2.0, -3.0);
+        let transforms = [
+            Transform::from_rotation(Vector3::UNIT_Z, std::f64::consts::FRAC_PI_2),
+            Transform::from_scale(2.0),
+            Transform::from_scaling(Vector3::new(-1.0, 1.0, 1.0)),
+        ];
+        for t in &transforms {
+            let mut minsert = source.clone();
+            transform_insert(&mut minsert, t);
+            // Every array instance lands where the transform sends it.
+            let expected: Vec<Vector3> =
+                source.array_points().iter().map(|p| t.apply(*p)).collect();
+            for (actual, expected) in minsert.array_points().iter().zip(&expected) {
+                assert_vector_near(*actual, *expected);
+            }
+        }
     }
 }
