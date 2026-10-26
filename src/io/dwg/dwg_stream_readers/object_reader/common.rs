@@ -197,7 +197,14 @@ pub fn is_entity_type(type_code: i16) -> bool {
 
 /// Returns true if the type code is a table control or entry.
 pub fn is_table_type(type_code: i16) -> bool {
-    matches!(type_code, 48..=71)
+    matches!(type_code, 48..=53 | 56..=57 | 60..=71)
+}
+
+/// Type codes inside the table range that name no object type (54, 55, 58,
+/// 59). Some writers leave records of these codes behind; they carry no
+/// object data and other readers ignore them.
+pub fn is_unused_type(type_code: i16) -> bool {
+    matches!(type_code, 54 | 55 | 58 | 59)
 }
 
 /// Map a DXF class name to the internal OBJ_* type code constant.

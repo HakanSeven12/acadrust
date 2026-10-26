@@ -7830,6 +7830,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
     fn write_image_definition(&mut self, imagedef: &ImageDefinition) -> Result<()> {
         self.writer.write_string(0, "IMAGEDEF")?;
         self.writer.write_handle(5, imagedef.handle)?;
+        let reactors: Vec<Handle> = imagedef
+            .reactors
+            .iter()
+            .copied()
+            .filter(|reactor| {
+                !reactor.is_null()
+                    && (self.valid_handles.is_empty() || self.valid_handles.contains(reactor))
+            })
+            .collect();
+        if !reactors.is_empty() {
+            self.writer.write_string(102, "{ACAD_REACTORS")?;
+            for reactor in reactors {
+                self.writer.write_handle(330, reactor)?;
+            }
+            self.writer.write_string(102, "}")?;
+        }
         self.writer.write_handle(330, imagedef.owner)?;
         self.writer.write_subclass("AcDbRasterImageDef")?;
 

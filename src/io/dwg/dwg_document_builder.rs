@@ -863,8 +863,25 @@ impl DwgDocumentBuilder {
         });
         let mut record_catalog = Vec::with_capacity(catalog_results.len());
         let mut skipped_catalog = 0usize;
+        let mut unused_records = 0usize;
         for result in catalog_results {
             match result {
+                Ok((handle, _, _, type_code)) if is_unused_type(type_code) => {
+                    unused_records += 1;
+                    if unused_records == 1 {
+                        let mut diagnostic = ReadDiagnostic::new(
+                            "unused-object-type",
+                            ReadStage::RecordStream,
+                            format!(
+                                "Ignored a record of unused DWG object type {type_code} at handle {handle:#X}"
+                            ),
+                        );
+                        diagnostic.section = Some("AcDb:AcDbObjects".to_string());
+                        diagnostic.record_handle = Some(handle);
+                        diagnostic.record_type = Some(type_code.to_string());
+                        push_read_diagnostic(&mut diagnostics, diagnostic);
+                    }
+                }
                 Ok(record) => record_catalog.push(record),
                 Err((handle, source_offset, failure)) => {
                     skipped_catalog = skipped_catalog.saturating_add(1);
@@ -6112,6 +6129,12 @@ impl DwgDocumentBuilder {
                     obj.pixel_size = (data.pixel_size.x, data.pixel_size.y);
                     obj.resolution_unit =
                         crate::objects::ResolutionUnit::from_code(data.resolution_unit as i32);
+                    // The list lives on the object; drop the side-map copy so
+                    // the writer cannot bring back a list the caller emptied.
+                    obj.reactors = document
+                        .reactors_by_handle
+                        .remove(&Handle::from(handle))
+                        .unwrap_or_default();
                     document.objects.insert(
                         Handle::from(handle),
                         crate::objects::ObjectType::ImageDefinition(obj),
@@ -6145,7 +6168,9 @@ impl DwgDocumentBuilder {
                             crate::objects::ImageDefinitionReactor {
                                 handle: Handle::from(handle),
                                 owner: owner_handle,
-                                image_handle: Handle::NULL,
+                                // The image owns its reactor; DWG stores no
+                                // separate image link.
+                                image_handle: owner_handle,
                             },
                         ),
                     );

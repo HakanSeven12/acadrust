@@ -8324,6 +8324,7 @@ impl<'a> SectionReader<'a> {
     /// Read an IMAGEDEF_REACTOR object
     fn read_imagedef_reactor(&mut self) -> Result<Option<ImageDefinitionReactor>> {
         let mut obj = ImageDefinitionReactor::new(Handle::NULL);
+        let mut in_subclass = false;
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
                 self.reader.push_back(pair);
@@ -8335,13 +8336,23 @@ impl<'a> SectionReader<'a> {
                         obj.handle = Handle::new(h);
                     }
                 }
+                100 => in_subclass = pair.value_string == "AcDbRasterImageDefReactor",
                 330 => {
                     if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                        obj.owner = Handle::new(h);
+                        // The 330 inside the subclass is the image link.
+                        if in_subclass {
+                            obj.image_handle = Handle::new(h);
+                        } else {
+                            obj.owner = Handle::new(h);
+                        }
                     }
                 }
                 _ => {}
             }
+        }
+        // The image owns its reactor; use the owner when the link is absent.
+        if obj.image_handle.is_null() {
+            obj.image_handle = obj.owner;
         }
         Ok(Some(obj))
     }
@@ -20947,6 +20958,7 @@ impl<'a> SectionReader<'a> {
     /// Read an IMAGEDEF object
     fn read_image_definition(&mut self) -> Result<Option<crate::objects::ImageDefinition>> {
         let mut def = crate::objects::ImageDefinition::new("");
+        let mut in_reactors = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 {
@@ -20954,6 +20966,7 @@ impl<'a> SectionReader<'a> {
                 break;
             }
             match pair.code {
+                102 => in_reactors = pair.value_string == "{ACAD_REACTORS",
                 5 => {
                     if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
                         def.handle = Handle::new(h);
@@ -20961,7 +20974,11 @@ impl<'a> SectionReader<'a> {
                 }
                 330 => {
                     if let Ok(h) = u64::from_str_radix(&pair.value_string, 16) {
-                        def.owner = Handle::new(h);
+                        if in_reactors {
+                            def.reactors.push(Handle::new(h));
+                        } else {
+                            def.owner = Handle::new(h);
+                        }
                     }
                 }
                 1 => def.file_name = pair.value_string.clone(),
@@ -20988,6 +21005,11 @@ impl<'a> SectionReader<'a> {
                 280 => {
                     if let Some(v) = pair.as_i16() {
                         def.is_loaded = v != 0;
+                    }
+                }
+                281 => {
+                    if let Some(v) = pair.as_i16() {
+                        def.resolution_unit = crate::objects::ResolutionUnit::from_code(v as i32);
                     }
                 }
                 _ => {}

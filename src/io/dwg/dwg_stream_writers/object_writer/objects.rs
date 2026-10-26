@@ -1208,13 +1208,11 @@ impl<'a> DwgObjectWriter<'a> {
     }
 
     fn write_legacy_table_row_style(&mut self, value: &RowCellStyle) {
-        self.writer.write_handle(
-            DwgReferenceType::HardPointer,
-            value
-                .text_style_handle
-                .map(|handle| handle.value())
-                .unwrap_or(0),
-        );
+        // A row read from DXF only has the text style name: resolve it as
+        // the R2010+ cell styles do, never write a null text style.
+        let text_style = self.resolve_table_row_text_style(value);
+        self.writer
+            .write_handle(DwgReferenceType::HardPointer, text_style.value());
         self.writer.write_bit_double(value.text_height);
         self.writer.write_bit_short(value.alignment as i16);
         self.writer.write_cm_true_color(&value.text_color);
@@ -2204,7 +2202,7 @@ impl<'a> DwgObjectWriter<'a> {
     fn write_image_definition(&mut self, def: &ImageDefinition) {
         // UNLISTED type — always use DXF class number (500+)
         let type_code = self.class_type_code("IMAGEDEF", common::OBJ_IMAGEDEF);
-        self.write_common_non_entity_data(type_code, def.handle, def.owner, &[], &None);
+        self.write_common_non_entity_data(type_code, def.handle, def.owner, &def.reactors, &None);
 
         self.writer.write_bit_long(def.class_version);
         self.writer.write_2raw_double(crate::types::Vector2::new(

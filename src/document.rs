@@ -5904,6 +5904,14 @@ impl CadDocument {
                     ObjectType::FieldList(value) => {
                         value.visit_handles_mut(&mut remap_object_handle);
                     }
+                    ObjectType::ImageDefinition(value) => {
+                        remap_object_handle(&mut value.owner);
+                        value.reactors.iter_mut().for_each(&mut remap_object_handle);
+                    }
+                    ObjectType::ImageDefinitionReactor(value) => {
+                        remap_object_handle(&mut value.owner);
+                        remap_object_handle(&mut value.image_handle);
+                    }
                     ObjectType::ProxyObject(value) => {
                         if let Some(new_handle) = remap_map.get(&value.owner.value()) {
                             value.owner = *new_handle;

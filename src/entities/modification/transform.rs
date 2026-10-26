@@ -1038,6 +1038,10 @@ pub(crate) fn transform_attribute_definition(e: &mut AttributeDefinition, transf
     let scale_factor = transformed_unit.length();
     e.height *= scale_factor;
     rotate_ocs_angle(&mut e.rotation, old_normal, transform);
+    // A multiline attribute draws its embedded MTEXT: transform it too.
+    if let Some(m) = e.embedded_mtext.as_deref_mut() {
+        transform_mtext(m, transform);
+    }
 }
 
 // ── AttributeEntity ──────────────────────────────────────────────────────────
@@ -1057,6 +1061,9 @@ pub(crate) fn transform_attribute_entity(e: &mut AttributeEntity, transform: &Tr
     let scale_factor = transformed_unit.length();
     e.height *= scale_factor;
     rotate_ocs_angle(&mut e.rotation, old_normal, transform);
+    if let Some(m) = e.embedded_mtext.as_deref_mut() {
+        transform_mtext(m, transform);
+    }
 }
 
 // ── Leader ───────────────────────────────────────────────────────────────────
@@ -1122,6 +1129,9 @@ pub(crate) fn transform_multileader(e: &mut MultiLeader, transform: &Transform) 
     e.context.arrowhead_size *= scale_factor;
     e.context.text_height *= scale_factor;
     e.context.landing_gap *= scale_factor;
+    e.context.text_width *= scale_factor;
+    e.context.text_boundary_height *= scale_factor;
+    e.context.block_content_scale = e.context.block_content_scale * scale_factor;
     rotate_stored_angle(&mut e.context.text_rotation, transform);
     rotate_stored_angle(&mut e.context.block_rotation, transform);
     rotate_stored_angle(&mut e.block_rotation, transform);
@@ -1471,6 +1481,10 @@ impl EntityType {
             EntityType::Extended(e) => e.apply_transform(transform),
             EntityType::Unknown(e) => transform_unknown(e, transform),
         }
+        // Unknown records have no geometry for their XDATA to follow.
+        if !matches!(self, EntityType::Unknown(_)) {
+            let _ = self.common_mut().extended_data.apply_transform(transform);
+        }
         // Applying a semantic transform invalidates verbatim DWG provenance;
         // unknown entities have no editable geometry and keep their payload.
         if transform_invalidates_raw_record(self) {
@@ -1511,6 +1525,21 @@ mod tests {
         transform_line(&mut line, &t);
         assert!((line.start.x - 2.0).abs() < 1e-10);
         assert!((line.end.x - 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_transform_multiline_attribute_transforms_embedded_mtext() {
+        let mut att = AttributeEntity::new("T".into(), "V".into());
+        let mut m = MText::new();
+        m.insertion_point = Vector3::new(10.0, 0.0, 0.0);
+        m.height = 2.5;
+        att.embedded_mtext = Some(Box::new(m));
+
+        // SCALE 2 about the origin: the drawn MTEXT must scale with the attribute.
+        transform_attribute_entity(&mut att, &Transform::from_scale(2.0));
+        let m = att.embedded_mtext.as_ref().unwrap();
+        assert!((m.insertion_point.x - 20.0).abs() < 1e-10);
+        assert!((m.height - 5.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1792,5 +1821,19 @@ mod tests {
         );
         assert!((b.vertices[0].bulge - 0.5).abs() < 1e-12);
         assert!((b.vertices[1].bulge - (-0.3)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_transform_multileader_scales_text_width_and_block() {
+        let mut ml = MultiLeader::default();
+        ml.context.text_width = 20.0;
+        ml.context.text_boundary_height = 5.0;
+        let t = Transform::from_scale(2.0);
+        transform_multileader(&mut ml, &t);
+        assert!((ml.context.text_width - 40.0).abs() < 1e-10);
+        assert!((ml.context.text_boundary_height - 10.0).abs() < 1e-10);
+        assert_eq!(ml.context.block_content_scale, Vector3::new(2.0, 2.0, 2.0));
+        // AutoCAD keeps the entity-level block scale override.
+        assert_eq!(ml.block_scale, Vector3::new(1.0, 1.0, 1.0));
     }
 }

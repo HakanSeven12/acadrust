@@ -276,6 +276,16 @@ impl<'a> SemanticInventoryV1<'a> {
                     owner,
                 );
             }
+            if let ObjectType::ImageDefinition(definition) = object {
+                for reactor in &definition.reactors {
+                    self.visit_relationship(
+                        &mut visitor,
+                        SemanticRelationshipKindV1::Reactor,
+                        SemanticReferenceV1::Resolved(SemanticNodeV1::Object(object)),
+                        *reactor,
+                    );
+                }
+            }
         }
 
         visitor(SemanticPartV1::SummaryInfo(summary_info));

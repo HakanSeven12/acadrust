@@ -1,5 +1,18 @@
 ## Changelog
 
+### Unreleased
+
+- **Classes of added entities** - Saving as DWG now declares the class of
+  every class-registered entity that the source file's class table lacks
+  (MULTILEADER, WIPEOUT, ACAD_TABLE, IMAGE, ARC_DIMENSION, ...), as it already
+  did for objects. Such an entity drawn into a file that never held one made
+  AutoCAD refuse to open the drawing.
+- **Attributed MINSERT arrays in DWG 2004+** - The INSERT/MINSERT reader now
+  consumes the owned-object count that follows the attributes flag from R2004
+  on. A MINSERT with attributes previously read its column count, row count
+  and spacings one field early (for example 2 x 3 at 15/10 came back as
+  1 x 2 at 1.0/~0), and saving the drawing kept the wrong array.
+
 ### 0.6.6
 
 - **Optional DWG parallelism (issue #156)** - Adds a default-enabled `parallel`
