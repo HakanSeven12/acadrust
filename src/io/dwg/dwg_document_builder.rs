@@ -32,6 +32,167 @@ fn viewport_override_base_layer(name: &str) -> Option<&str> {
         .then_some(base)
 }
 use crate::io::dwg::dwg_stream_readers::object_reader::{DwgObjectReader, EntityCommonData};
+
+/// Report relationships the file itself leaves inconsistent, which the reader
+/// keeps as stored rather than repairing (acadrust #135-#142): block markers
+/// without a record or disagreeing with it, layer references that resolve to
+/// nothing or to another name, nonfinite polyline bulges, unnamed text styles
+/// and shape segments without a style. A consumer that requires a consistent
+/// drawing reads the reason here instead of inferring it from a clean read.
+fn source_state_diagnostics(document: &CadDocument, diagnostics: &mut Vec<ReadDiagnostic>) {
+    let mut report = |code: &str, handle: Handle, kind: &str, message: String| {
+        let mut diagnostic = ReadDiagnostic::new(code, ReadStage::Objects, message);
+        diagnostic.record_handle = Some(handle.value());
+        diagnostic.record_type = Some(kind.to_string());
+        push_read_diagnostic(diagnostics, diagnostic);
+    };
+    let mut marker_names: HashMap<Handle, &str> = HashMap::new();
+    for record in document.block_records.iter() {
+        for marker in [record.block_entity_handle, record.block_end_handle] {
+            if marker.is_null() {
+                continue;
+            }
+            if let Some(other) = marker_names.insert(marker, &record.name) {
+                report(
+                    "shared-block-marker",
+                    marker,
+                    "BLOCK_RECORD",
+                    format!(
+                        "Block records {other:?} and {:?} both name marker {:#X}",
+                        record.name,
+                        marker.value()
+                    ),
+                );
+            }
+        }
+    }
+    for entity in &document.entities {
+        let common = entity.common();
+        let handle = common.handle;
+        let (kind, is_end) = match entity.as_ref() {
+            EntityType::Block(_) => ("BLOCK", false),
+            EntityType::BlockEnd(_) => ("ENDBLK", true),
+            _ => continue,
+        };
+        let record = document
+            .block_records
+            .iter()
+            .find(|record| record.handle == common.owner_handle);
+        match record {
+            None => report(
+                "orphan-block-marker",
+                handle,
+                kind,
+                format!(
+                    "{kind} {:#X} is owned by {:#X}, which is not a block record",
+                    handle.value(),
+                    common.owner_handle.value()
+                ),
+            ),
+            Some(record) => {
+                let named = match is_end {
+                    true => record.block_end_handle,
+                    false => record.block_entity_handle,
+                };
+                if named != handle {
+                    report(
+                        "block-marker-mismatch",
+                        handle,
+                        kind,
+                        format!(
+                            "Block record {:?} names {kind} {:#X}, but the {kind} it owns is {:#X}",
+                            record.name,
+                            named.value(),
+                            handle.value()
+                        ),
+                    );
+                }
+            }
+        }
+    }
+    for entity in document.entities() {
+        let common = entity.common();
+        let kind = entity.as_entity().entity_type();
+        if let Some(layer_handle) = common.layer_handle.filter(|handle| !handle.is_null()) {
+            match document.layers.iter().find(|layer| layer.handle == layer_handle) {
+                None => report(
+                    "unresolved-layer-handle",
+                    common.handle,
+                    kind,
+                    format!(
+                        "{kind} {:#X} references layer {:#X}, which is not in the layer table; it reads as layer {:?}",
+                        common.handle.value(),
+                        layer_handle.value(),
+                        common.layer
+                    ),
+                ),
+                // A hidden per-viewport override record reads as its base layer.
+                Some(layer)
+                    if !layer.name.eq_ignore_ascii_case(&common.layer)
+                        && !viewport_override_base_layer(&layer.name)
+                            .is_some_and(|base| base.eq_ignore_ascii_case(&common.layer)) =>
+                {
+                    report(
+                        "layer-name-handle-mismatch",
+                        common.handle,
+                        kind,
+                        format!(
+                            "{kind} {:#X} names layer {:?} but references {:?} ({:#X})",
+                            common.handle.value(),
+                            common.layer,
+                            layer.name,
+                            layer_handle.value()
+                        ),
+                    )
+                }
+                Some(_) => {}
+            }
+        }
+        if let EntityType::LwPolyline(polyline) = entity {
+            if let Some(index) = polyline.vertices.iter().position(|v| !v.bulge.is_finite()) {
+                report(
+                    "nonfinite-bulge",
+                    common.handle,
+                    kind,
+                    format!(
+                        "LWPOLYLINE {:#X} stores a nonfinite bulge at vertex {index}",
+                        common.handle.value()
+                    ),
+                );
+            }
+        }
+    }
+    for style in document.text_styles.iter() {
+        if !style.is_shape_file && style.name.trim().is_empty() {
+            report(
+                "unnamed-text-style",
+                style.handle,
+                "STYLE",
+                format!("Text style {:#X} has no name", style.handle.value()),
+            );
+        }
+    }
+    for linetype in document.line_types.iter() {
+        use crate::tables::linetype::LineTypeComplexContent;
+        let unstyled = linetype.elements.iter().position(|element| {
+            element.complex.as_ref().is_some_and(|complex| {
+                matches!(complex.content, LineTypeComplexContent::Shape { .. })
+                    && complex.style_handle.is_null()
+            })
+        });
+        if let Some(index) = unstyled {
+            report(
+                "shape-without-style",
+                linetype.handle,
+                "LTYPE",
+                format!(
+                    "Linetype {:?} draws a shape at element {index} without a shape-file style",
+                    linetype.name
+                ),
+            );
+        }
+    }
+}
 use crate::io::dwg::parallel::{filter_map_slice, for_each_mut, map_chunks, map_mut, worker_count};
 use crate::io::read::{push_read_diagnostic, ReadDiagnostic, ReadStage};
 use crate::notification::{NotificationCollection, NotificationType};
@@ -3651,6 +3812,8 @@ impl DwgDocumentBuilder {
                 build_started.elapsed().as_secs_f64() * 1000.0,
             );
         }
+
+        source_state_diagnostics(document, &mut diagnostics);
 
         DwgBuildOutcome {
             notifications: self.notifications,
