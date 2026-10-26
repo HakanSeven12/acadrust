@@ -938,10 +938,12 @@ pub fn read_class_object_data(
             let status_flags = reader.read_bit_long();
             let update_status = reader.read_variable_text();
             let mut custom_data = Vec::new();
+            // The connected objects are bare handles; the strings above
+            // are all the link's text.
             for _ in 0..count(reader.read_bit_long(), reader) {
                 custom_data.push(DataLinkCustomData {
                     target: Handle::from(reader.read_handle()),
-                    value: reader.read_variable_text(),
+                    value: String::new(),
                 });
             }
             ClassObjectData::DataLink(DataLink {

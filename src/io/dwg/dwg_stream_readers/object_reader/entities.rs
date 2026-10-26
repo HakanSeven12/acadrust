@@ -3706,7 +3706,9 @@ fn read_table_cell(reader: &mut DwgMergedReader, version: DwgVersion) -> TableCe
         cell.custom_data_items
             .push(read_custom_table_data(reader, version));
     }
-    cell.has_linked_data = reader.read_bit_long() == 1;
+    // Linked-data flags: bit 0 = the cell anchors a linked range (files
+    // store 3 for the anchor).
+    cell.has_linked_data = reader.read_bit_long() & 1 != 0;
     if cell.has_linked_data {
         let handle = reader.read_handle();
         cell.data_link_handle = (handle != 0).then(|| Handle::from(handle));

@@ -7201,15 +7201,18 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
                 self.writer.write_i16(177, value.path_option)?;
                 self.writer.write_i32(93, value.status_flags)?;
                 self.writer.write_string(304, &value.update_status)?;
+                // The connected objects come first as bare handles, then the
+                // hard owner, then an (empty) custom data map — the order the
+                // reference format uses; the map body is a count, not handles.
                 self.writer.write_i32(94, value.custom_data.len() as i32)?;
-                self.writer.write_string(305, "CUSTOMDATA")?;
-                self.writer.write_string(1, "DATAMAP_BEGIN")?;
                 for item in &value.custom_data {
                     self.writer.write_handle(330, item.target)?;
-                    self.writer.write_string(304, &item.value)?;
                 }
-                self.writer.write_string(309, "DATAMAP_END")?;
                 self.writer.write_handle(360, value.hard_owner)?;
+                self.writer.write_string(305, "CUSTOMDATA")?;
+                self.writer.write_string(1, "DATAMAP_BEGIN")?;
+                self.writer.write_i32(90, 0)?;
+                self.writer.write_string(309, "DATAMAP_END")?;
                 Ok(())
             }
             Data::PersistentSubentityManager(value) => {
