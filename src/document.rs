@@ -4326,6 +4326,22 @@ impl CadDocument {
         }
     }
 
+    /// Reactors of a non-entity object such as a block record.
+    pub fn object_reactors(&self, object: Handle) -> &[Handle] {
+        self.reactors_by_handle
+            .get(&object)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Add `reactor` to a non-entity object's reactors, once.
+    pub fn add_object_reactor(&mut self, object: Handle, reactor: Handle) {
+        let reactors = self.reactors_by_handle.entry(object).or_default();
+        if !reactors.contains(&reactor) {
+            reactors.push(reactor);
+        }
+    }
+
     /// Ensure an extension dictionary exists for `owner`.
     pub fn ensure_extension_dictionary(&mut self, owner: Handle) -> Handle {
         if let Some(handle) = self.extension_dictionary_handle(owner) {
