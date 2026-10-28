@@ -913,18 +913,32 @@ fn edge_integral(edge: &BoundaryEdge) -> Option<(f64, Vector2, Vector2)> {
     })
 }
 
-/// Whether loop `inner` lies inside loop `outer`, judged at its first point
-/// that is not on `outer`'s boundary (a loop entirely on it counts as inside).
+/// Whether loop `inner` lies inside loop `outer`, judged at a point well
+/// inside `inner`: neighbouring loops that share an edge overlap only along
+/// it, so a corner can fall a drafting tolerance inside the other loop.
 fn loop_inside(inner: &[Vector2], outer: &[Vector2]) -> bool {
-    let on_boundary = |p: Vector2| {
-        (0..outer.len()).any(|i| {
-            point_segment_distance(p, outer[i], outer[(i + 1) % outer.len()]) <= INTERSECTION_EPS
-        })
-    };
-    inner
+    point_in_polygon(interior_point(inner), outer)
+}
+
+/// The middle of the widest span of `poly` along the horizontal line through
+/// the middle of its bounding box.
+fn interior_point(poly: &[Vector2]) -> Vector2 {
+    let (lo, hi) = poly
         .iter()
-        .find(|p| !on_boundary(**p))
-        .is_none_or(|p| point_in_polygon(*p, outer))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| {
+            (lo.min(p.y), hi.max(p.y))
+        });
+    let y = (lo + hi) / 2.0;
+    let mut xs: Vec<f64> = (0..poly.len())
+        .filter_map(|i| {
+            let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+            ((a.y > y) != (b.y > y)).then(|| a.x + (b.x - a.x) * (y - a.y) / (b.y - a.y))
+        })
+        .collect();
+    xs.sort_by(f64::total_cmp);
+    xs.chunks_exact(2)
+        .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+        .map_or(poly[0], |span| Vector2::new((span[0] + span[1]) / 2.0, y))
 }
 
 #[cfg(test)]
