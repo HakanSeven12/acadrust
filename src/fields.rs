@@ -197,7 +197,7 @@ fn eval_field(
             diesel_eval(doc, expr, ctx)
         }
         // AcExpr — a table cell formula (Sum/Average/… over A1-style cell refs).
-        "AcExpr" => eval_acexpr(doc, field, host),
+        "AcExpr" => eval_acexpr(doc, field, ctx, host),
         // AcObjProp[.ver] — a property of a referenced object.
         e if e.starts_with("AcObjProp") => eval_acobjprop(doc, field, host),
         // AcSm[.16.2] — a property of the drawing's sheet in its sheet set.
@@ -253,10 +253,17 @@ fn eval_template(
 
 // ── AcExpr: formulas ─────────────────────────────────────────────────────────
 
-fn eval_acexpr(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<String> {
+fn eval_acexpr(
+    doc: &CadDocument,
+    field: &FieldDef,
+    ctx: &dyn FieldContext,
+    host: Handle,
+) -> Option<String> {
     let code = &field.code;
     let body = code.trim().strip_prefix("\\AcExpr").unwrap_or(code);
-    let (expr, fmt) = match body.find("\\f ") {
+    // The formula's own format follows the expression; a nested field's
+    // `\f "…"` sits inside its `%<…>%` and belongs to that field.
+    let (expr, fmt) = match top_level_find(body, "\\f ") {
         Some(fp) => (body[..fp].trim(), format_of(&body[fp + 3..])),
         None => (body.trim(), String::new()),
     };
@@ -269,6 +276,9 @@ fn eval_acexpr(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<Stri
         host_cells: true,
         used_cells: false,
         depth: 0,
+        kids: child_fields(doc, field.handle),
+        ctx: Some(ctx),
+        host,
     };
     let v = match p.parse_all() {
         Ok(v) => v,
@@ -282,6 +292,139 @@ fn eval_acexpr(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<Stri
         Num::Int(n) => n.to_string(),
         Num::Real(x) => format!("{:.6}", x),
     })
+}
+
+/// The child fields of `parent`, in `%<\_FldIdx N>%` order (AutoCAD creates a
+/// formula's children in that order, so their handles ascend with N).
+fn child_fields(doc: &CadDocument, parent: Handle) -> Vec<&FieldDef> {
+    if parent.is_null() {
+        return Vec::new();
+    }
+    let mut kids: Vec<&FieldDef> = doc.fields.values().filter(|f| f.owner == parent).collect();
+    kids.sort_by_key(|f| u64::from(f.handle));
+    kids
+}
+
+/// Length of the `%<…>%` marker `s` starts with, nested markers included.
+fn field_marker_len(s: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    if !s.starts_with("%<") {
+        return None;
+    }
+    let (mut i, mut depth) = (0usize, 0usize);
+    while i + 1 < b.len() {
+        if b[i] == b'%' && b[i + 1] == b'<' {
+            depth += 1;
+            i += 2;
+        } else if b[i] == b'>' && b[i + 1] == b'%' {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                return Some(i);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Byte offset of the first `pat` in `s` outside any nested `%<…>%` field.
+fn top_level_find(s: &str, pat: &str) -> Option<usize> {
+    let b = s.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < b.len() {
+        if b[i..].starts_with(b"%<") {
+            depth += 1;
+            i += 2;
+        } else if b[i..].starts_with(b">%") {
+            depth = depth.saturating_sub(1);
+            i += 2;
+        } else {
+            if depth == 0 && b[i..].starts_with(pat.as_bytes()) {
+                return Some(i);
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
+/// The number a nested field contributes to a formula. Object properties use
+/// their full-precision value (after the field's conversion factor and, for
+/// points, its chosen coordinate) rather than the rounded text they display;
+/// other fields contribute the number their text shows.
+fn nested_number(
+    doc: &CadDocument,
+    field: &FieldDef,
+    ctx: &dyn FieldContext,
+    host: Handle,
+) -> ExprResult {
+    if field.evaluator.starts_with("AcObjProp") {
+        if let Some(v) = objprop_number(doc, field, host) {
+            return Ok(Num::Real(v));
+        }
+    }
+    match eval_field(doc, field, ctx, host) {
+        None => Err(ExprError::Unresolved),
+        Some(text) => number_in_text(&text)
+            .map(Num::Real)
+            .ok_or(ExprError::Invalid),
+    }
+}
+
+/// The first number written in `text` (`+1.25`, `-3`, `1,234.50`, `12,5`),
+/// ignoring MTEXT codes and any prefix or suffix around it.
+fn number_in_text(text: &str) -> Option<f64> {
+    let plain = mtext_plain(text);
+    let s = plain.trim();
+    let start = s.find(|c: char| c.is_ascii_digit() || c == '.')?;
+    let negative = s[..start].trim_end().ends_with('-');
+    let run: String = s[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',')
+        .collect();
+    let run = run.trim_end_matches(['.', ',']);
+    // The last separator is the decimal one when both occur; a lone comma is
+    // decimal unless it groups exactly three digits.
+    let normalized = match (run.rfind('.'), run.rfind(',')) {
+        (Some(d), Some(c)) if c > d => run.replace('.', "").replace(',', "."),
+        (Some(_), Some(_)) => run.replace(',', ""),
+        (None, Some(c)) if run.matches(',').count() > 1 || run.len() - c - 1 == 3 => {
+            run.replace(',', "")
+        }
+        (None, Some(_)) => run.replace(',', "."),
+        _ => run.to_string(),
+    };
+    let v: f64 = normalized.parse().ok()?;
+    Some(if negative { -v } else { v })
+}
+
+/// MTEXT contents without formatting codes (`{\H2;12.5}` → `12.5`).
+fn mtext_plain(s: &str) -> String {
+    let mut out = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' | '}' => {}
+            '\\' => match chars.next() {
+                Some('P') | Some('~') => out.push(' '),
+                Some(c @ ('\\' | '{' | '}')) => out.push(c),
+                // Codes with an argument run to the next `;`.
+                Some('A' | 'C' | 'c' | 'F' | 'f' | 'H' | 'Q' | 'T' | 'W' | 'p' | 'S') => {
+                    for c in chars.by_ref() {
+                        if c == ';' {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// The ACAD_TABLE whose rendered block owns the host cell (its MTEXT sits in the
@@ -392,6 +535,11 @@ struct ExprParser<'a> {
     host_cells: bool,
     used_cells: bool,
     depth: u8,
+    /// The formula's child fields, in `%<\_FldIdx N>%` order.
+    kids: Vec<&'a FieldDef>,
+    /// Evaluates nested fields; without it they are left unresolved.
+    ctx: Option<&'a dyn FieldContext>,
+    host: Handle,
 }
 
 impl<'a> ExprParser<'a> {
@@ -488,8 +636,36 @@ impl<'a> ExprParser<'a> {
             }
             c if c.is_ascii_digit() || c == b'.' => self.parse_number(),
             c if c.is_ascii_alphabetic() => self.parse_name(),
+            b'%' => self.parse_nested_field(),
             _ => Err(ExprError::Invalid),
         }
+    }
+    /// A nested field used as an operand: `%<\_FldIdx N>%` (the formula's
+    /// Nth child field, as AutoCAD stores it) or a whole field code written
+    /// inline, `%<\AcObjProp Object(%<\_ObjId n>%).Area>%` (Field dialog
+    /// previews).
+    fn parse_nested_field(&mut self) -> ExprResult {
+        let rest = std::str::from_utf8(&self.s[self.i..]).map_err(|_| ExprError::Invalid)?;
+        let len = field_marker_len(rest).ok_or(ExprError::Invalid)?;
+        let inner = rest[2..len - 2].trim();
+        self.i += len;
+        let ctx = self.ctx.ok_or(ExprError::Unresolved)?;
+        if let Some(n) = inner.strip_prefix("\\_FldIdx ") {
+            let n: usize = n.trim().parse().map_err(|_| ExprError::Invalid)?;
+            let kid = *self.kids.get(n).ok_or(ExprError::Unresolved)?;
+            return nested_number(self.doc, kid, ctx, self.host);
+        }
+        if !inner.starts_with('\\') || self.depth >= 8 {
+            return Err(ExprError::Invalid);
+        }
+        let field = FieldDef {
+            handle: Handle::NULL,
+            owner: Handle::NULL,
+            evaluator: code_evaluator(inner).to_string(),
+            code: inner.to_string(),
+            objects: self.objects.to_vec(),
+        };
+        nested_number(self.doc, &field, ctx, self.host)
     }
     fn parse_number(&mut self) -> ExprResult {
         let start = self.i;
@@ -661,6 +837,9 @@ fn cell_value(doc: &CadDocument, table: &Table, col: usize, row: usize, depth: u
             host_cells: false,
             used_cells: false,
             depth: depth + 1,
+            kids: child_fields(doc, f.handle),
+            ctx: None,
+            host: Handle::NULL,
         };
         return match p.parse_all() {
             Ok(v) => CellNum::Num(v),
@@ -737,7 +916,27 @@ enum PropVal {
 
 /// Evaluate an `AcObjProp` field — a property of a referenced object, e.g.
 fn eval_acobjprop(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<String> {
-    let code = &field.code;
+    let (prop, fmt) = objprop_parts(&field.code)?;
+    let Some(handle) = objprop_object(doc, field, host) else {
+        // A block placeholder outside a block reference shows its name.
+        return field
+            .code
+            .contains("?BlockRefId")
+            .then(|| text_case(prop.to_string(), &fmt));
+    };
+    // NamedObject fields: `.Name` of a layer, block, style, linetype, view, …
+    if prop == "Name" {
+        if let Some(name) = named_object_name(doc, handle) {
+            return Some(text_case(name, &fmt));
+        }
+    }
+    let entity = find_entity(doc, handle)?;
+    let val = entity_property(doc, field, &entity, prop)?;
+    Some(format_propval(doc, val, &fmt))
+}
+
+/// The property name and display format of an `AcObjProp` code.
+fn objprop_parts(code: &str) -> Option<(&str, String)> {
     let prop = code.split(").").nth(1)?.split([' ', '\\']).next()?.trim();
     if prop.is_empty() {
         return None;
@@ -746,34 +945,122 @@ fn eval_acobjprop(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<S
         .find("\\f ")
         .map(|p| format_of(&code[p + 3..]))
         .unwrap_or_default();
-    let direct;
-    let handle = if code.contains("?BlockRefId") {
-        match attribute_insert(doc, host) {
-            Some(insert) => {
-                direct = insert;
-                &direct
-            }
-            None => return Some(text_case(prop.to_string(), &fmt)),
-        }
-    } else {
-        match between(code, "_ObjIdx ", ">%") {
-            Some(idx) => field.objects.get(idx.trim().parse::<usize>().ok()?)?,
-            // `%<\_ObjId n>%` names the object directly (preview codes).
-            None => {
-                direct = Handle::new(between(code, "_ObjId ", ">%")?.trim().parse().ok()?);
-                &direct
-            }
-        }
-    };
-    // NamedObject fields: `.Name` of a layer, block, style, linetype, view, …
-    if prop == "Name" {
-        if let Some(name) = named_object_name(doc, *handle) {
-            return Some(text_case(name, &fmt));
-        }
+    Some((prop, fmt))
+}
+
+/// The object an `AcObjProp` field reads: its indexed object, an object named
+/// directly by `%<\_ObjId n>%` (preview codes), or the block reference that
+/// owns the host attribute for `?BlockRefId` placeholders.
+fn objprop_object(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<Handle> {
+    let code = &field.code;
+    if code.contains("?BlockRefId") {
+        return attribute_insert(doc, host);
     }
-    let entity = doc.entities().find(|e| &e.common().handle == handle)?;
-    let val = object_property(doc, entity, prop)?;
-    Some(format_propval(doc, val, &fmt))
+    match between(code, "_ObjIdx ", ">%") {
+        Some(idx) => field
+            .objects
+            .get(idx.trim().parse::<usize>().ok()?)
+            .copied(),
+        None => Some(Handle::new(
+            between(code, "_ObjId ", ">%")?.trim().parse().ok()?,
+        )),
+    }
+}
+
+/// The full-precision number an `AcObjProp` field stands for in a formula:
+/// its value after the field's conversion factor, the one coordinate a point
+/// format picks, or the number a text property holds.
+fn objprop_number(doc: &CadDocument, field: &FieldDef, host: Handle) -> Option<f64> {
+    let (prop, fmt) = objprop_parts(&field.code)?;
+    let handle = objprop_object(doc, field, host)?;
+    let entity = find_entity(doc, handle)?;
+    let pic = Picture::parse(&fmt);
+    match entity_property(doc, field, &entity, prop)? {
+        PropVal::Num(n) => Some(pic.convert(n)),
+        PropVal::Point(p) => {
+            let axis = match pic.pt? {
+                1 => 0,
+                2 => 1,
+                4 => 2,
+                _ => return None,
+            };
+            Some(pic.convert(p[axis]))
+        }
+        PropVal::Text(s) => number_in_text(&s),
+        PropVal::Angle(_) | PropVal::Lineweight(_) => None,
+    }
+}
+
+/// An entity by handle, including the attributes of block references (which
+/// live inside their INSERT rather than in the entity list).
+fn find_entity(doc: &CadDocument, h: Handle) -> Option<std::borrow::Cow<'_, EntityType>> {
+    use std::borrow::Cow;
+    if let Some(e) = doc
+        .get_entity(h)
+        .or_else(|| doc.entities().find(|e| e.common().handle == h))
+    {
+        return Some(Cow::Borrowed(e));
+    }
+    doc.entities().find_map(|e| match e {
+        EntityType::Insert(i) => i
+            .attributes
+            .iter()
+            .find(|a| a.common.handle == h)
+            .map(|a| Cow::Owned(EntityType::AttributeEntity(a.clone()))),
+        _ => None,
+    })
+}
+
+/// [`object_property`] as the field's evaluator reports it. The versioned
+/// evaluator (`AcObjProp.16.2`) reads the property system the Properties
+/// palette uses, which gives locations in the current UCS (a level mark
+/// reading an end point's Y shows its height above the UCS origin); the plain
+/// `AcObjProp` evaluator reports them in the WCS.
+fn entity_property(
+    doc: &CadDocument,
+    field: &FieldDef,
+    e: &EntityType,
+    prop: &str,
+) -> Option<PropVal> {
+    let val = object_property(doc, e, prop)?;
+    let in_ucs = field.evaluator.starts_with("AcObjProp.");
+    Some(match (prop, val) {
+        (
+            "Center" | "StartPoint" | "EndPoint" | "InsertionPoint" | "Position",
+            PropVal::Point(p),
+        ) if in_ucs => PropVal::Point(to_current_ucs(doc, e, p)),
+        (_, val) => val,
+    })
+}
+
+/// `p` (WCS) in the current UCS of the space `e` is drawn in.
+fn to_current_ucs(doc: &CadDocument, e: &EntityType, p: [f64; 3]) -> [f64; 3] {
+    let h = &doc.header;
+    let paper = doc.block_records.iter().any(|b| {
+        b.handle == e.common().owner_handle
+            && b.name.to_ascii_lowercase().starts_with("*paper_space")
+    });
+    let (o, x, y) = if paper {
+        (
+            h.paper_space_ucs_origin,
+            h.paper_space_ucs_x_axis,
+            h.paper_space_ucs_y_axis,
+        )
+    } else {
+        (
+            h.model_space_ucs_origin,
+            h.model_space_ucs_x_axis,
+            h.model_space_ucs_y_axis,
+        )
+    };
+    // An unset UCS is the WCS.
+    if x.length() < 1e-12 || y.length() < 1e-12 {
+        return p;
+    }
+    let (x, y) = (x.normalize(), y.normalize());
+    let z = x.cross(&y);
+    let d = crate::types::Vector3::new(p[0] - o.x, p[1] - o.y, p[2] - o.z);
+    [d.dot(&x), d.dot(&y), d.dot(&z)]
 }
 
 fn attribute_insert(doc: &CadDocument, host: Handle) -> Option<Handle> {
@@ -908,6 +1195,18 @@ fn object_property(doc: &CadDocument, e: &EntityType, prop: &str) -> Option<Prop
         },
         "InsertionPoint" | "Position" => match e {
             EntityType::Insert(i) => point(&i.insert_point),
+            EntityType::Text(t) => point(&t.insertion_point),
+            EntityType::MText(m) => point(&m.insertion_point),
+            EntityType::AttributeEntity(a) => point(&a.insertion_point),
+            EntityType::AttributeDefinition(a) => point(&a.insertion_point),
+            _ => return None,
+        },
+        // Text contents (an attribute's value), without MTEXT formatting.
+        "TextString" => match e {
+            EntityType::Text(t) => PropVal::Text(t.value.clone()),
+            EntityType::MText(m) => PropVal::Text(mtext_plain(&m.value)),
+            EntityType::AttributeEntity(a) => PropVal::Text(a.value.clone()),
+            EntityType::AttributeDefinition(a) => PropVal::Text(a.default_value.clone()),
             _ => return None,
         },
         "Rotation" => match e {
@@ -1036,6 +1335,7 @@ fn area(e: &EntityType) -> Option<f64> {
             let major = el.major_axis.length();
             Some(PI * major * major * el.minor_axis_ratio)
         }
+        EntityType::Hatch(h) => crate::entities::modification::explode::hatch_area(h),
         // An open polyline measures as if closed.
         _ => {
             let (vertices, _) = bulge_vertices(e)?;
@@ -3753,6 +4053,39 @@ mod tests {
         );
         assert_eq!(num_str(5.0), "5");
         assert_eq!(rtos(3.14159, Some(2)), "3.14");
+    }
+
+    #[test]
+    fn nested_field_markers() {
+        let marker = "%<\\AcObjProp Object(%<\\_ObjId 42>%).Area \\f \"%lu2\">%";
+        assert_eq!(
+            field_marker_len(&format!("{marker}*2)")),
+            Some(marker.len())
+        );
+        assert_eq!(field_marker_len("%<\\_FldIdx 0"), None);
+        assert_eq!(field_marker_len("(1+2)"), None);
+
+        let code = format!("({marker}*2) \\f \"%lu2%pr2\"");
+        assert_eq!(top_level_find(&code, "\\f "), code.rfind("\\f "));
+        assert_eq!(top_level_find(marker, "\\f "), None);
+    }
+
+    #[test]
+    fn numbers_written_in_text() {
+        for (text, n) in [
+            ("+1.25", 1.25),
+            ("-3", -3.0),
+            ("1,234.50", 1234.5),
+            ("1.234,50", 1234.5),
+            ("1,234,567", 1234567.0),
+            ("12,5", 12.5),
+            ("{\\H2;12.5}", 12.5),
+            ("Kot: -0.45 m", -0.45),
+        ] {
+            assert_eq!(number_in_text(text), Some(n), "{text}");
+        }
+        assert_eq!(number_in_text("----"), None);
+        assert_eq!(mtext_plain("{\\fArial|b0;A}\\PB"), "A B");
     }
 }
 
