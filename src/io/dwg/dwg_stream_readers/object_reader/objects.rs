@@ -444,6 +444,7 @@ pub fn read_table_style(reader: &mut DwgMergedReader, version: DwgVersion) -> Ta
     let mut value = TableStyle::new("");
     if !version.r2010_plus() {
         value.name = reader.read_variable_text();
+        value.description = value.name.clone();
         value.flow_direction = crate::objects::TableFlowDirection::from(reader.read_bit_short());
         value.flags = crate::objects::TableStyleFlags::from_bits_retain(reader.read_bit_short());
         value.horizontal_margin = reader.read_bit_double();
@@ -458,6 +459,7 @@ pub fn read_table_style(reader: &mut DwgMergedReader, version: DwgVersion) -> Ta
     }
     value.modern_unknown_byte = reader.read_byte();
     value.name = reader.read_variable_text();
+    value.description = value.name.clone();
     value.modern_unknown_long1 = reader.read_bit_long();
     // The R2010+ table style flags (title / header suppressed).
     value.flags =

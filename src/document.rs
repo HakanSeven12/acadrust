@@ -4423,8 +4423,9 @@ impl CadDocument {
     }
 
     /// A table style's name is its key in the table style dictionary; the
-    /// record's own string is its description, empty for most styles. Each
-    /// row's text style is the one its handle points at.
+    /// record's own string is its description, empty for most styles, and is
+    /// what the writers store there. Each row's text style is the one its
+    /// handle points at.
     pub fn resolve_table_style_names(&mut self) {
         let names: HashMap<Handle, String> = self
             .objects
@@ -4448,10 +4449,8 @@ impl CadDocument {
             let ObjectType::TableStyle(style) = object else {
                 continue;
             };
-            if style.name.is_empty() {
-                if let Some(name) = names.get(handle) {
-                    style.name = name.clone();
-                }
+            if let Some(name) = names.get(handle) {
+                style.name = name.clone();
             }
             for row in [
                 &mut style.data_row_style,
