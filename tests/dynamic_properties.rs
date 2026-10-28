@@ -328,6 +328,7 @@ fn reflected_rotation_keeps_its_parameter_orientation_and_rejects_broken_caches(
     assert!(doc
         .dynamic_block_properties(definition, Some(insert))
         .unwrap_err()
+        .to_string()
         .contains("Malformed"));
 }
 

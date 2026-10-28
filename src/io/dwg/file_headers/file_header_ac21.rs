@@ -509,7 +509,7 @@ impl DwgFileHeaderWriterAC21 {
             .ok_or_else(|| DxfError::InvalidFormat(format!("Unknown AC21 section: {}", name)))?;
         let encoding = ac21_section_info::encoding(name).unwrap_or(1);
         // We don't implement XOR obfuscation (encryption=2), so always
-        // store encryption=0 in the section map.  AutoCAD will read the
+        // store encryption=0 in the section map.  ACAD will read the
         // data without attempting to decrypt, which is correct.
         let encryption: u64 = 0;
         let mut max_page_size = ac21_section_info::page_size(name).unwrap_or(0xF800);
@@ -582,7 +582,7 @@ impl DwgFileHeaderWriterAC21 {
     /// [0x400 File header copy]
     /// ```
     pub fn write_file<W: Write + Seek>(&mut self, output: &mut W) -> Result<(), DxfError> {
-        // Initialize CRC seed (0 matches AutoCAD reference files)
+        // Initialize CRC seed (0 matches ACAD reference files)
         self.crc_seed = 0;
 
         // ── Step 1: Write section map + copy (appended after data pages) ──
@@ -658,7 +658,7 @@ impl DwgFileHeaderWriterAC21 {
 
         // CRC/random fields (spec §5.2.1.1 — order is critical for RNG state)
         // §5.2.1.1.1: RandomSeed IS the CRC encoder's seed (input, not output)
-        // Using a fixed value (we can use any value; AutoCAD verifies consistency)
+        // Using a fixed value (we can use any value; ACAD verifies consistency)
         let random_seed = FILE_RANDOM_SEED;
         metadata.random_seed = random_seed;
         metadata.crc_seed = self.crc_seed; // always 0 per §5.2.1.1.2
@@ -854,7 +854,7 @@ impl DwgFileHeaderWriterAC21 {
     ///
     /// The `target_page_size` determines the correction factor: we compute the
     /// maximum correction factor that fills the page without exceeding it.
-    /// This matches how AutoCAD computes the factor (spec §5.3).
+    /// This matches how ACAD computes the factor (spec §5.3).
     ///
     /// Returns the encoded bytes and metadata (does NOT write to stream).
     fn encode_system_page(
@@ -1256,10 +1256,10 @@ impl DwgFileHeaderWriterAC21 {
             // 0x06: 5 bytes of 0x00
             cursor.write_all(&[0u8; 5])?;
 
-            // 0x0B: Maintenance release version (0x19 matches AutoCAD 2007)
+            // 0x0B: Maintenance release version (0x19 matches ACAD 2007)
             cursor.write_all(&[0x19u8])?;
 
-            // 0x0C: Byte 0x03 (constant, matches AC18 and AutoCAD reference files)
+            // 0x0C: Byte 0x03 (constant, matches AC18 and ACAD reference files)
             cursor.write_all(&[0x03u8])?;
 
             // 0x0D: Preview address (4 bytes)
@@ -1530,7 +1530,7 @@ mod tests {
 
         // Section map page_size = max decompressed page size (0xF800 for AcDbObjects).
         // Page record size = actual on-disk RS-encoded + aligned size.
-        // They are intentionally different (matches AutoCAD behavior: spec §5.2).
+        // They are intentionally different (matches ACAD behavior: spec §5.2).
         let expected_max = section.max_page_size;
         for page in &section.pages {
             assert_eq!(

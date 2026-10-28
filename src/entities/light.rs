@@ -3,7 +3,7 @@
 //! Includes attenuation, shadow and optional photometric/IES data.
 
 use super::{Entity, EntityCommon};
-use crate::types::{BoundingBox3D, Color, Handle, LineWeight, Transform, Transparency, Vector3};
+use crate::types::{BoundingBox3D, Color, Transform, Vector3};
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -137,42 +137,14 @@ impl Default for Light {
 }
 
 impl Entity for Light {
-    fn handle(&self) -> Handle {
-        self.common.handle
+    fn common(&self) -> &super::EntityCommon {
+        &self.common
     }
-    fn set_handle(&mut self, handle: Handle) {
-        self.common.handle = handle;
+
+    fn common_mut(&mut self) -> &mut super::EntityCommon {
+        &mut self.common
     }
-    fn layer(&self) -> &str {
-        &self.common.layer
-    }
-    fn set_layer(&mut self, layer: String) {
-        self.common.layer = layer;
-    }
-    fn color(&self) -> Color {
-        self.common.color
-    }
-    fn set_color(&mut self, color: Color) {
-        self.common.color = color;
-    }
-    fn line_weight(&self) -> LineWeight {
-        self.common.line_weight
-    }
-    fn set_line_weight(&mut self, weight: LineWeight) {
-        self.common.line_weight = weight;
-    }
-    fn transparency(&self) -> Transparency {
-        self.common.transparency
-    }
-    fn set_transparency(&mut self, transparency: Transparency) {
-        self.common.transparency = transparency;
-    }
-    fn is_invisible(&self) -> bool {
-        self.common.invisible
-    }
-    fn set_invisible(&mut self, invisible: bool) {
-        self.common.invisible = invisible;
-    }
+
     fn bounding_box(&self) -> BoundingBox3D {
         BoundingBox3D::from_point(self.position)
     }

@@ -30,7 +30,7 @@ const CODE_BMP: u8 = 2;
 const CODE_WMF: u8 = 3;
 const CODE_PNG: u8 = 6;
 
-/// Fixed 80-byte reserved "header data" (code 1) AutoCAD writes ahead of a BMP
+/// Fixed 80-byte reserved "header data" (code 1) ACAD writes ahead of a BMP
 /// image. Observed to be all zeros in real files.
 const HEADER_LEN: usize = 80;
 
@@ -102,8 +102,8 @@ pub fn parse_preview(bytes: &[u8], base: u64) -> Option<Preview> {
 /// Build a preview container to be placed at file offset `base`.
 ///
 /// With `None` (or empty data) returns the minimal empty preview — the
-/// long-standing default that AutoCAD accepts as "no thumbnail". A BMP image is
-/// preceded by the 80-byte reserved header (code 1) exactly as AutoCAD writes
+/// long-standing default that ACAD accepts as "no thumbnail". A BMP image is
+/// preceded by the 80-byte reserved header (code 1) exactly as ACAD writes
 /// it; PNG/WMF use a single image descriptor.
 pub fn build_preview(preview: Option<&Preview>, base: u64) -> Vec<u8> {
     let p = match preview {

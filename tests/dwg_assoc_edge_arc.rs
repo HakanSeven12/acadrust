@@ -67,11 +67,6 @@ fn round_trip(version: DxfVersion, edge: &AssocEdgeActionParam) {
 }
 
 #[test]
-fn terminal_ac1024_arc_preserves_three_scalars() {
-    round_trip(DxfVersion::AC1024, &arc());
-}
-
-#[test]
 fn four_scalar_arcs_preserve_nonzero_fourth_value() {
     let mut edge = arc();
     edge.curve.push(AssocCurveValue::Real(7.25));
@@ -129,6 +124,7 @@ fn incomplete_arcs_are_not_accepted_as_typed_edges() {
         .splice(0..0, [AssocCurveValue::Int(1), AssocCurveValue::Int(11)]);
     for (version, edge) in [
         (DxfVersion::AC1024, short),
+        (DxfVersion::AC1024, arc()),
         (DxfVersion::AC1024, nested),
         (DxfVersion::AC1027, arc()),
         (DxfVersion::AC1032, arc()),

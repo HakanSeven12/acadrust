@@ -3,7 +3,7 @@ use crate::types::Handle;
 
 /// Legacy viewport-entity table record (VX_TABLE_RECORD / VPENT_HDR).
 ///
-/// AutoCAD persisted this table from R13 through R2000.  Each record links a
+/// ACAD persisted this table from R13 through R2000.  Each record links a
 /// viewport entity to the previous viewport-entry record in the chain.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

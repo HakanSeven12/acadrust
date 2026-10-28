@@ -103,7 +103,7 @@ impl DwgBitReader {
     /// Decode bytes using the document's legacy text code page.
     pub fn decode_legacy_text(&self, bytes: &[u8]) -> String {
         let (decoded, _, _) = self.encoding.decode(bytes);
-        crate::io::dxf::code_page::decode_legacy_escapes(&decoded)
+        crate::io::dxf::code_page::decode_legacy_escapes_in(&decoded, self.encoding)
     }
 
     /// Get the DWG version.
@@ -528,34 +528,36 @@ impl DwgBitReader {
 
     /// Read a raw short (RS type) — 2 bytes, little-endian.
     pub fn read_raw_short(&mut self) -> i16 {
-        let b0 = self.read_byte() as u16;
-        let b1 = self.read_byte() as u16;
-        (b0 | (b1 << 8)) as i16
+        i16::from_le_bytes([self.read_byte(), self.read_byte()])
     }
 
     /// Read a raw unsigned short.
     pub fn read_raw_ushort(&mut self) -> u16 {
-        let b0 = self.read_byte() as u16;
-        let b1 = self.read_byte() as u16;
-        b0 | (b1 << 8)
+        u16::from_le_bytes([self.read_byte(), self.read_byte()])
     }
 
-    /// Read a raw long (RL type) — 4 bytes, little-endian, returns as i64 (matching the reference ReadRawLong → long).
+    /// Read a raw long (RL type).
+    ///
+    /// The DWG field is a signed 32-bit integer. The return type is `i64` so
+    /// callers can use it next to handles without an extra cast. The sign of
+    /// the 32-bit value is preserved.
     pub fn read_raw_long(&mut self) -> i64 {
-        let b0 = self.read_byte() as u32;
-        let b1 = self.read_byte() as u32;
-        let b2 = self.read_byte() as u32;
-        let b3 = self.read_byte() as u32;
-        (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)) as i32 as i64
+        i64::from(i32::from_le_bytes([
+            self.read_byte(),
+            self.read_byte(),
+            self.read_byte(),
+            self.read_byte(),
+        ]))
     }
 
-    /// Read a raw unsigned long (RD is actually 4 bytes in the reference ReadRawULong).
+    /// Read a raw unsigned long. The DWG field is 4 bytes.
     pub fn read_raw_ulong(&mut self) -> u64 {
-        let b0 = self.read_byte() as u64;
-        let b1 = self.read_byte() as u64;
-        let b2 = self.read_byte() as u64;
-        let b3 = self.read_byte() as u64;
-        b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+        u64::from(u32::from_le_bytes([
+            self.read_byte(),
+            self.read_byte(),
+            self.read_byte(),
+            self.read_byte(),
+        ]))
     }
 
     /// Read a raw double (RD type) — 8 bytes, little-endian IEEE 754.
@@ -853,7 +855,7 @@ impl DwgBitReader {
             // Decode using the reader's encoding; legacy strings may embed
             // CIF \U+XXXX escapes for characters outside the code page.
             let (decoded, _, _) = self.encoding.decode(&bytes);
-            crate::io::dxf::code_page::decode_legacy_escapes(&decoded)
+            crate::io::dxf::code_page::decode_legacy_escapes_in(&decoded, self.encoding)
         }
     }
 
@@ -912,7 +914,10 @@ impl DwgBitReader {
             let (decoded, _, _) = self.encoding.decode(&bytes);
             // Legacy strings may embed CIF \U+XXXX escapes for characters
             // outside the code page — decode them into Unicode chars.
-            crate::io::dxf::code_page::decode_legacy_escapes(&decoded.replace('\0', ""))
+            crate::io::dxf::code_page::decode_legacy_escapes_in(
+                &decoded.replace('\0', ""),
+                self.encoding,
+            )
         }
     }
 
@@ -945,8 +950,9 @@ impl DwgBitReader {
             }
             let bytes = self.read_bytes(length);
             let (decoded, _, _) = self.encoding.decode(&bytes);
-            Some(crate::io::dxf::code_page::decode_legacy_escapes(
+            Some(crate::io::dxf::code_page::decode_legacy_escapes_in(
                 &decoded.replace('\0', ""),
+                self.encoding,
             ))
         }
     }
@@ -1017,74 +1023,39 @@ impl DwgBitReader {
         }
     }
 
-    /// Read an EnColor (entity color with transparency).
+    /// Read the entity color (ENC) record described by ODA §2.11.
     ///
-    /// Returns (Color, Transparency, bool has_color_handle).
+    /// AutoCAD probes (reC/a2004..a2018) resolve two ambiguities in the
+    /// specification: the packed color is BL, and a DBCOLOR reference suppresses
+    /// that BL. Transparency follows the packed color when both are present.
+    /// The caller reads the optional DBCOLOR handle from the handle stream.
     pub fn read_en_color(&mut self) -> (Color, Transparency, bool) {
-        if self.dxf_version >= DxfVersion::AC1018 {
-            // R2004+
-            let size = self.read_bit_short();
-            let mut transparency = Transparency::BY_LAYER;
+        let word = self.read_bit_short();
+        if self.dxf_version < DxfVersion::AC1018 {
+            return (Color::from_index(word), Transparency::BY_LAYER, false);
+        }
 
-            if size != 0 {
-                let flags = (size as u16) & 0xFF00;
-
-                // 0x4000: AcDbColor handle reference (read from the handle
-                // section by the caller). When present, NO rgb value follows
-                // in the data stream.
-                let is_book_color = (flags & 0x4000) > 0;
-
-                // A true/complex color rgb (BL) is present ONLY when the color
-                // is not a book-color reference (0x4000) but has the 0x8000
-                // flag. A book color carries its rgb via the handle instead.
-                //
-                // Field order in the data stream is rgb/color FIRST, then the
-                // transparency BL. (An entity with both a true colour and a
-                // transparency has flags 0x8000|0x2000 = 0xA000; the rgb long
-                // precedes the transparency long.)
-                let color = if is_book_color {
-                    Color::from_index((size & 0x0FFF) as i16)
-                } else if (flags & 0x8000) > 0 {
-                    // Complex/true color BL follows in main stream.
-                    // The BL uses the same packed format as CMC:
-                    //   0xC0000000 = ByLayer, flag byte bit 0 set = ACI index,
-                    //   otherwise = true RGB color.
-                    let rgb = self.read_bit_long() as u32;
-                    let arr = rgb.to_le_bytes();
-                    if rgb == 0xC000_0000 {
-                        Color::ByLayer
-                    } else if (rgb & 0x0100_0000) != 0 {
-                        // Indexed color (flag byte 0xC3 has bit 0 set)
-                        Color::from_index(arr[0] as i16)
-                    } else {
-                        // True color RGB (flag byte 0xC2)
-                        Color::from_rgb(arr[2], arr[1], arr[0])
-                    }
-                } else {
-                    // ACI color index (lower 12 bits)
-                    Color::from_index((size & 0x0FFF) as i16)
-                };
-
-                // 0x2000: transparency (BL) — read AFTER the rgb/color-book
-                // value, matching the entity ENC field order.
-                if (flags & 0x2000) > 0 {
-                    let value = self.read_bit_long();
-                    transparency = Transparency::from_alpha_value(value as u32);
-                }
-
-                (color, transparency, is_book_color)
-            } else {
-                (Color::ByBlock, Transparency::BY_LAYER, false)
+        let word = word as u16;
+        let has_book = word & 0x4000 != 0;
+        let has_rgb = word & 0x8000 != 0 && !has_book;
+        let color = if has_rgb {
+            let packed = self.read_bit_long() as u32;
+            match packed >> 24 {
+                0xC0 => Color::ByLayer,
+                0xC1 => Color::ByBlock,
+                0xC3 => Color::from_index((packed & 0xFF) as i16),
+                0xC8 => Color::None,
+                _ => Color::from_true_color_value(packed as i32),
             }
         } else {
-            // Pre-R2004
-            let color_number = self.read_bit_short();
-            (
-                Color::from_index(color_number),
-                Transparency::BY_LAYER,
-                false,
-            )
-        }
+            Color::from_index((word & 0x1FFF) as i16)
+        };
+        let transparency = if word & 0x2000 != 0 {
+            Transparency::from_alpha_value(self.read_bit_long() as u32)
+        } else {
+            Transparency::BY_LAYER
+        };
+        (color, transparency, has_book)
     }
 
     /// Read a color by index (BS → Color).
@@ -1495,7 +1466,7 @@ mod tests {
         let mut w = make_writer(DxfVersion::AC1015);
         let reference = 3.14;
         // Case 00: stored == reference → 2 bits
-        // Writer: write_bit_double_with_default(stored=3.14, reference=3.14)
+        // Writer stores 3.14 against the reference default.
         w.write_bit_double_with_default(3.14, reference);
         // Case 11: stored=100.5 is very different from reference=3.14 → full RD
         w.write_bit_double_with_default(100.5, reference);
@@ -1508,9 +1479,11 @@ mod tests {
     }
 }
 
+/// R2007+ text is UTF-16 and holds every character, so a `\U+XXXX` in it is
+/// content; only the `\M+` double-byte escapes are transport.
 fn decode_mif(text: String) -> String {
-    if crate::io::dxf::code_page::has_legacy_escape(&text) {
-        crate::io::dxf::code_page::decode_legacy_escapes(&text)
+    if text.contains("\\M+") {
+        crate::io::dxf::code_page::decode_mif_escapes(&text)
     } else {
         text
     }

@@ -1,7 +1,7 @@
 //! Encode / decode the annotative flag carried in `AcadAnnotative` EED.
 //!
 //! STYLE / DIMSTYLE / TABLESTYLE records have no native annotative field, so
-//! AutoCAD stores it as extended data under the `AcadAnnotative` application,
+//! ACAD stores it as extended data under the `AcadAnnotative` application,
 //! exactly mirroring the DXF XDATA form `AnnotativeData { 1 <flag> }`.
 //!
 //! These functions produce / parse the raw EED data-item byte block (the bytes

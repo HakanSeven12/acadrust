@@ -156,43 +156,77 @@ pub use viewport::{GridFlags, StandardView, Viewport, ViewportRenderMode, Viewpo
 pub use wipeout::{Wipeout, WipeoutClipMode, WipeoutClipType, WipeoutDisplayFlags};
 pub use xline::XLine;
 
-/// Base trait for all CAD entities
+/// Base trait for all CAD entities.
+///
+/// Common fields live on [`EntityCommon`]. Implement [`Self::common`] and
+/// [`Self::common_mut`]; the handle, layer, color, line weight, transparency,
+/// and visibility methods forward to those.
 pub trait Entity {
+    /// Common entity fields.
+    fn common(&self) -> &EntityCommon;
+
+    /// Mutable common entity fields.
+    fn common_mut(&mut self) -> &mut EntityCommon;
+
     /// Get the entity's unique handle
-    fn handle(&self) -> Handle;
+    fn handle(&self) -> Handle {
+        self.common().handle
+    }
 
     /// Set the entity's handle
-    fn set_handle(&mut self, handle: Handle);
+    fn set_handle(&mut self, handle: Handle) {
+        self.common_mut().handle = handle;
+    }
 
     /// Get the entity's layer name
-    fn layer(&self) -> &str;
+    fn layer(&self) -> &str {
+        &self.common().layer
+    }
 
     /// Set the entity's layer name
-    fn set_layer(&mut self, layer: String);
+    fn set_layer(&mut self, layer: String) {
+        self.common_mut().layer = layer;
+    }
 
     /// Get the entity's color
-    fn color(&self) -> Color;
+    fn color(&self) -> Color {
+        self.common().color
+    }
 
     /// Set the entity's color
-    fn set_color(&mut self, color: Color);
+    fn set_color(&mut self, color: Color) {
+        self.common_mut().color = color;
+    }
 
     /// Get the entity's line weight
-    fn line_weight(&self) -> LineWeight;
+    fn line_weight(&self) -> LineWeight {
+        self.common().line_weight
+    }
 
     /// Set the entity's line weight
-    fn set_line_weight(&mut self, weight: LineWeight);
+    fn set_line_weight(&mut self, weight: LineWeight) {
+        self.common_mut().line_weight = weight;
+    }
 
     /// Get the entity's transparency
-    fn transparency(&self) -> Transparency;
+    fn transparency(&self) -> Transparency {
+        self.common().transparency
+    }
 
     /// Set the entity's transparency
-    fn set_transparency(&mut self, transparency: Transparency);
+    fn set_transparency(&mut self, transparency: Transparency) {
+        self.common_mut().transparency = transparency;
+    }
 
     /// Check if the entity is invisible
-    fn is_invisible(&self) -> bool;
+    fn is_invisible(&self) -> bool {
+        self.common().invisible
+    }
 
     /// Set the entity's visibility
-    fn set_invisible(&mut self, invisible: bool);
+    fn set_invisible(&mut self, invisible: bool) {
+        self.common_mut().invisible = invisible;
+    }
 
     /// Get the bounding box of the entity
     fn bounding_box(&self) -> BoundingBox3D;
@@ -810,110 +844,12 @@ impl EntityType {
 
     /// Get a reference to the entity's common data
     pub fn common(&self) -> &EntityCommon {
-        match self {
-            EntityType::Point(e) => &e.common,
-            EntityType::Line(e) => &e.common,
-            EntityType::Circle(e) => &e.common,
-            EntityType::Arc(e) => &e.common,
-            EntityType::Ellipse(e) => &e.common,
-            EntityType::Polyline(e) => &e.common,
-            EntityType::Polyline2D(e) => &e.common,
-            EntityType::Polyline3D(e) => &e.common,
-            EntityType::LwPolyline(e) => &e.common,
-            EntityType::Text(e) => &e.common,
-            EntityType::MText(e) => &e.common,
-            EntityType::Spline(e) => &e.common,
-            EntityType::Helix(e) => &e.common,
-            EntityType::Dimension(e) => &e.base().common,
-            EntityType::Hatch(e) => &e.common,
-            EntityType::Solid(e) => &e.common,
-            EntityType::Face3D(e) => &e.common,
-            EntityType::Insert(e) => &e.common,
-            EntityType::Block(e) => &e.common,
-            EntityType::BlockEnd(e) => &e.common,
-            EntityType::Ray(e) => &e.common,
-            EntityType::XLine(e) => &e.common,
-            EntityType::Viewport(e) => &e.common,
-            EntityType::AttributeDefinition(e) => &e.common,
-            EntityType::AttributeEntity(e) => &e.common,
-            EntityType::Leader(e) => &e.common,
-            EntityType::MultiLeader(e) => &e.common,
-            EntityType::MLine(e) => &e.common,
-            EntityType::Mesh(e) => &e.common,
-            EntityType::RasterImage(e) => &e.common,
-            EntityType::Solid3D(e) => &e.common,
-            EntityType::Region(e) => &e.common,
-            EntityType::Body(e) => &e.common,
-            EntityType::Surface(e) => &e.common,
-            EntityType::Table(e) => &e.common,
-            EntityType::Tolerance(e) => &e.common,
-            EntityType::PolyfaceMesh(e) => &e.common,
-            EntityType::Wipeout(e) => &e.common,
-            EntityType::Shape(e) => &e.common,
-            EntityType::Underlay(e) => &e.common,
-            EntityType::Seqend(e) => &e.common,
-            EntityType::Ole2Frame(e) => &e.common,
-            EntityType::PolygonMesh(e) => &e.common,
-            EntityType::Light(e) => &e.common,
-            EntityType::SectionSymbol(e) => &e.common,
-            EntityType::ViewBorder(e) => &e.common,
-            EntityType::Extended(e) => &e.common,
-            EntityType::Unknown(e) => &e.common,
-        }
+        self.as_entity().common()
     }
 
     /// Get a mutable reference to the entity's common data
     pub fn common_mut(&mut self) -> &mut EntityCommon {
-        match self {
-            EntityType::Point(e) => &mut e.common,
-            EntityType::Line(e) => &mut e.common,
-            EntityType::Circle(e) => &mut e.common,
-            EntityType::Arc(e) => &mut e.common,
-            EntityType::Ellipse(e) => &mut e.common,
-            EntityType::Polyline(e) => &mut e.common,
-            EntityType::Polyline2D(e) => &mut e.common,
-            EntityType::Polyline3D(e) => &mut e.common,
-            EntityType::LwPolyline(e) => &mut e.common,
-            EntityType::Text(e) => &mut e.common,
-            EntityType::MText(e) => &mut e.common,
-            EntityType::Spline(e) => &mut e.common,
-            EntityType::Helix(e) => &mut e.common,
-            EntityType::Dimension(e) => &mut e.base_mut().common,
-            EntityType::Hatch(e) => &mut e.common,
-            EntityType::Solid(e) => &mut e.common,
-            EntityType::Face3D(e) => &mut e.common,
-            EntityType::Insert(e) => &mut e.common,
-            EntityType::Block(e) => &mut e.common,
-            EntityType::BlockEnd(e) => &mut e.common,
-            EntityType::Ray(e) => &mut e.common,
-            EntityType::XLine(e) => &mut e.common,
-            EntityType::Viewport(e) => &mut e.common,
-            EntityType::AttributeDefinition(e) => &mut e.common,
-            EntityType::AttributeEntity(e) => &mut e.common,
-            EntityType::Leader(e) => &mut e.common,
-            EntityType::MultiLeader(e) => &mut e.common,
-            EntityType::MLine(e) => &mut e.common,
-            EntityType::Mesh(e) => &mut e.common,
-            EntityType::RasterImage(e) => &mut e.common,
-            EntityType::Solid3D(e) => &mut e.common,
-            EntityType::Region(e) => &mut e.common,
-            EntityType::Body(e) => &mut e.common,
-            EntityType::Surface(e) => &mut e.common,
-            EntityType::Table(e) => &mut e.common,
-            EntityType::Tolerance(e) => &mut e.common,
-            EntityType::PolyfaceMesh(e) => &mut e.common,
-            EntityType::Wipeout(e) => &mut e.common,
-            EntityType::Shape(e) => &mut e.common,
-            EntityType::Underlay(e) => &mut e.common,
-            EntityType::Seqend(e) => &mut e.common,
-            EntityType::Ole2Frame(e) => &mut e.common,
-            EntityType::PolygonMesh(e) => &mut e.common,
-            EntityType::Light(e) => &mut e.common,
-            EntityType::SectionSymbol(e) => &mut e.common,
-            EntityType::ViewBorder(e) => &mut e.common,
-            EntityType::Extended(e) => &mut e.common,
-            EntityType::Unknown(e) => &mut e.common,
-        }
+        self.as_entity_mut().common_mut()
     }
 }
 

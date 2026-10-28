@@ -47,7 +47,7 @@ const FILE_HEADER_SIZE: usize = FILE_HEADER_SIZE_R2000;
 pub struct DwgFileHeaderWriterAC15 {
     /// DXF version being written.
     version: DxfVersion,
-    /// AutoCAD maintenance release version at file-header offset 0x0B.
+    /// ACAD maintenance release version at file-header offset 0x0B.
     maintenance_version: u8,
     /// Compact DWG code-page index.
     code_page: u16,

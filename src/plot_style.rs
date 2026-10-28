@@ -107,7 +107,7 @@ impl PlotStyleTable {
         }
     }
 
-    pub fn from_bytes(name: impl Into<String>, raw: &[u8]) -> Result<Self, String> {
+    pub fn from_bytes(name: impl Into<String>, raw: &[u8]) -> crate::error::Result<Self> {
         let name = name.into();
         let is_stb = name.to_ascii_lowercase().ends_with(".stb");
         let (text, warnings) = decompress_ctb(raw)?;
@@ -117,7 +117,7 @@ impl PlotStyleTable {
     }
 
     /// Encode this table as CTB/STB file bytes.
-    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
+    pub fn to_bytes(&self) -> crate::error::Result<Vec<u8>> {
         compress_ctb(self.to_text().as_bytes())
     }
 
@@ -259,7 +259,7 @@ impl PlotStyleTable {
 /// stream fails on its own), a zlib stream with a bad trailer is retried as
 /// raw deflate, and text that is not UTF-8 is read as Windows-1252 — the
 /// code page those applications write descriptions in.
-fn decompress_ctb(data: &[u8]) -> Result<(String, Vec<String>), String> {
+fn decompress_ctb(data: &[u8]) -> crate::error::Result<(String, Vec<String>)> {
     const PREFIX: &[u8] = b"PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec";
     let mut warnings = Vec::new();
     let mut decoded;
@@ -293,7 +293,8 @@ fn decompress_ctb(data: &[u8]) -> Result<(String, Vec<String>), String> {
                 "CTB text is incomplete: the header announces {text_len} bytes \
                  but only {} could be read",
                 decoded.len()
-            ));
+            )
+            .into());
         }
         if decoded.len() != text_len {
             warnings.push(format!(
@@ -341,23 +342,23 @@ const MAX_INFLATED_BYTES: u64 = 64 * 1024 * 1024;
 /// `take(cap)` stops *at* the cap, which cannot distinguish "exactly cap"
 /// (within the contract — "exceeds means exceeds") from "at least cap",
 /// so `cap + 1` makes the boundary unambiguous.
-fn inflate_capped(reader: impl Read, what: &str) -> Result<Vec<u8>, String> {
+fn inflate_capped(reader: impl Read, what: &str) -> crate::error::Result<Vec<u8>> {
     let mut out = Vec::new();
     let read = reader
         .take(MAX_INFLATED_BYTES + 1)
         .read_to_end(&mut out)
         .map_err(|e| format!("{what}: {e}"))?;
     if read as u64 > MAX_INFLATED_BYTES {
-        return Err(format!(
-            "{what}: inflated data exceeds the {MAX_INFLATED_BYTES}-byte limit"
-        ));
+        return Err(
+            format!("{what}: inflated data exceeds the {MAX_INFLATED_BYTES}-byte limit").into(),
+        );
     }
     Ok(out)
 }
 
 /// Inflate a zlib stream, falling back to the raw deflate data behind its
 /// two-byte header when the stream's own trailer is wrong.
-fn inflate_lenient(payload: &[u8], warnings: &mut Vec<String>) -> Result<Vec<u8>, String> {
+fn inflate_lenient(payload: &[u8], warnings: &mut Vec<String>) -> crate::error::Result<Vec<u8>> {
     use flate2::read::{DeflateDecoder, ZlibDecoder};
     match inflate_capped(ZlibDecoder::new(payload), "CTB zlib decompress") {
         Ok(decoded) => Ok(decoded),
@@ -411,7 +412,7 @@ fn windows_1252_char(byte: u8) -> char {
 }
 
 /// Compress plot-style text content as a CTB/STB file.
-fn compress_ctb(text: &[u8]) -> Result<Vec<u8>, String> {
+fn compress_ctb(text: &[u8]) -> crate::error::Result<Vec<u8>> {
     use flate2::{write::ZlibEncoder, Compression};
     use std::io::Write;
     const PREFIX: &[u8] = b"PIAFILEVERSION_2.0,CTBVER1,compress\r\npmzlibcodec";
@@ -454,7 +455,11 @@ fn packed_rgb([r, g, b]: [u8; 3]) -> i32 {
 
 // ── Text parser ───────────────────────────────────────────────────────────────
 
-fn parse_plot_style_text(text: &str, name: String, is_stb: bool) -> Result<PlotStyleTable, String> {
+fn parse_plot_style_text(
+    text: &str,
+    name: String,
+    is_stb: bool,
+) -> crate::error::Result<PlotStyleTable> {
     if text.lines().any(|line| line.trim() == "begin_plot_style") {
         return parse_legacy_plot_style_text(text, name, is_stb);
     }
@@ -638,7 +643,7 @@ fn parse_legacy_plot_style_text(
     text: &str,
     name: String,
     is_stb: bool,
-) -> Result<PlotStyleTable, String> {
+) -> crate::error::Result<PlotStyleTable> {
     let mut table = PlotStyleTable::identity(name);
     table.is_stb = is_stb;
     let mut style_index = 1usize;
@@ -824,7 +829,7 @@ mod lenient_loading_tests {
         let bytes = compressed(&table_with_description("ok"));
         let cut = &bytes[..bytes.len() / 2];
         let error = PlotStyleTable::from_bytes("foreign.ctb", cut).unwrap_err();
-        assert!(error.contains("incomplete"), "{error}");
+        assert!(error.to_string().contains("incomplete"), "{error}");
     }
 }
 
@@ -864,7 +869,7 @@ mod inflate_limit_tests {
         let mut data = vec![b'\n'];
         data.extend(payload);
         let error = decompress_ctb(&data).expect_err("one byte over must be refused");
-        assert!(error.contains("limit"), "{error}");
+        assert!(error.to_string().contains("limit"), "{error}");
     }
 
     /// Twice the 64 MiB inflate cap the fix introduces — a payload that is
@@ -889,7 +894,7 @@ mod inflate_limit_tests {
         let mut data = vec![b'\n'];
         data.extend(payload);
         let error = decompress_ctb(&data).expect_err("zlib bomb must be refused");
-        assert!(error.contains("limit"), "{error}");
+        assert!(error.to_string().contains("limit"), "{error}");
     }
 
     #[test]
@@ -906,7 +911,7 @@ mod inflate_limit_tests {
         let mut data = vec![b'\n'];
         data.extend(payload);
         let error = decompress_ctb(&data).expect_err("deflate bomb must be refused");
-        assert!(error.contains("limit"), "{error}");
+        assert!(error.to_string().contains("limit"), "{error}");
     }
 }
 

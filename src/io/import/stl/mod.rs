@@ -17,18 +17,18 @@ pub mod ascii;
 pub mod binary;
 
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
 
 use crate::document::CadDocument;
-use crate::entities::mesh::{Mesh, MeshFace};
+use crate::entities::mesh::Mesh;
 use crate::entities::EntityType;
-use crate::error::{DxfError, Result};
+use crate::error::Result;
 use crate::types::Vector3;
 
 use super::color_mapping::{create_material_layer, rgb_to_color};
-use super::ImportConfig;
+use super::mesh::TriangleAssembler;
+use super::{read_path_bytes, read_reader_bytes, ImportConfig};
 
 /// An individual STL triangle.
 #[derive(Debug, Clone)]
@@ -63,15 +63,8 @@ impl StlImporter {
     /// Create an importer from a file path.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let mut file = File::open(path).map_err(|e| {
-            DxfError::ImportError(format!("Cannot open '{}': {}", path.display(), e))
-        })?;
-        let mut data = Vec::new();
-        file.read_to_end(&mut data).map_err(|e| {
-            DxfError::ImportError(format!("Cannot read '{}': {}", path.display(), e))
-        })?;
         Ok(Self {
-            data,
+            data: read_path_bytes(path)?,
             config: ImportConfig::default(),
         })
     }
@@ -85,13 +78,9 @@ impl StlImporter {
     }
 
     /// Create an importer from a reader.
-    pub fn from_reader<R: Read>(mut reader: R) -> Result<Self> {
-        let mut data = Vec::new();
-        reader
-            .read_to_end(&mut data)
-            .map_err(|e| DxfError::ImportError(format!("Cannot read STL data: {}", e)))?;
+    pub fn from_reader<R: Read>(reader: R) -> Result<Self> {
         Ok(Self {
-            data,
+            data: read_reader_bytes(reader, "STL data")?,
             config: ImportConfig::default(),
         })
     }
@@ -149,6 +138,9 @@ impl StlImporter {
                     self.config.merge_vertices,
                     self.config.merge_tolerance,
                 );
+                if mesh.faces.is_empty() {
+                    continue;
+                }
                 let mut mesh_entity = mesh;
                 mesh_entity.common.layer = layer;
                 mesh_entity.common.color = color;
@@ -170,6 +162,9 @@ impl StlImporter {
                 self.config.merge_vertices,
                 self.config.merge_tolerance,
             );
+            if mesh.faces.is_empty() {
+                return Ok(doc);
+            }
             mesh.common.layer = layer;
             doc.add_entity(EntityType::Mesh(mesh))?;
         }
@@ -180,36 +175,33 @@ impl StlImporter {
 
 /// Determine whether a byte buffer looks like an ASCII STL.
 ///
-/// Heuristic: starts with `solid` followed by whitespace/alpha, AND is not a
-/// valid binary STL (binary files sometimes start with "solid" in their
-/// 80-byte header).
+/// A binary file whose 80-byte header happens to start with `solid` is still
+/// binary when its length is `84 + 50 * triangle_count`, including a length
+/// that has a few trailing bytes and no `facet` keyword.
 fn is_ascii_stl(data: &[u8]) -> bool {
-    // Must start with "solid"
     let starts_solid = data.len() >= 5
         && data[..5].eq_ignore_ascii_case(b"solid")
         && (data.len() == 5 || data[5].is_ascii_whitespace());
 
-    if !starts_solid {
-        return false;
-    }
-
-    if data.len() < 15 {
-        // Starts with "solid" but too short to be binary (84 bytes minimum); treat as ASCII
-        return true;
-    }
-
-    // Check if it could be a binary file that happens to start with "solid"
-    // Binary STL: bytes 80..84 = triangle count, total size = 84 + 50*count
     if data.len() >= 84 {
-        let count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as usize;
-        let expected = 84 + 50 * count;
-        if data.len() == expected {
-            // Exact binary size match — probably binary
+        let count = u32::from_le_bytes([data[80], data[81], data[82], data[83]]) as u64;
+        let expected = 84u64.saturating_add(count.saturating_mul(50));
+        if data.len() as u64 == expected {
             return false;
         }
     }
 
-    true
+    if !starts_solid {
+        return false;
+    }
+    if data.len() < 84 {
+        return true;
+    }
+
+    let sample = &data[..data.len().min(65_536)];
+    sample
+        .windows(5)
+        .any(|window| window.eq_ignore_ascii_case(b"facet"))
 }
 
 /// Group triangle indices by their colour.
@@ -233,96 +225,29 @@ fn build_mesh(
     merge: bool,
     tolerance: f64,
 ) -> Mesh {
-    if merge {
-        build_mesh_merged(stl_mesh, tri_indices, scale, tolerance)
-    } else {
-        build_mesh_unmerged(stl_mesh, tri_indices, scale)
-    }
-}
-
-/// Build mesh without vertex merging — 3 unique vertices per triangle.
-fn build_mesh_unmerged(stl_mesh: &StlMesh, tri_indices: &[usize], scale: f64) -> Mesh {
-    let mut vertices = Vec::with_capacity(tri_indices.len() * 3);
-    let mut faces = Vec::with_capacity(tri_indices.len());
-
+    let mut assembler =
+        TriangleAssembler::with_triangle_capacity(merge, tolerance, tri_indices.len());
     for &ti in tri_indices {
         let tri = &stl_mesh.triangles[ti];
-        let base = vertices.len();
-        for v in &tri.vertices {
-            vertices.push(Vector3::new(v[0] * scale, v[1] * scale, v[2] * scale));
-        }
-        faces.push(MeshFace::triangle(base, base + 1, base + 2));
+        assembler.push_triangle(
+            Vector3::new(
+                tri.vertices[0][0] * scale,
+                tri.vertices[0][1] * scale,
+                tri.vertices[0][2] * scale,
+            ),
+            Vector3::new(
+                tri.vertices[1][0] * scale,
+                tri.vertices[1][1] * scale,
+                tri.vertices[1][2] * scale,
+            ),
+            Vector3::new(
+                tri.vertices[2][0] * scale,
+                tri.vertices[2][1] * scale,
+                tri.vertices[2][2] * scale,
+            ),
+        );
     }
-
-    let mut mesh = Mesh::new();
-    mesh.vertices = vertices;
-    mesh.faces = faces;
-    mesh.compute_edges();
-    mesh
-}
-
-/// Build mesh with vertex merging using spatial hashing.
-fn build_mesh_merged(
-    stl_mesh: &StlMesh,
-    tri_indices: &[usize],
-    scale: f64,
-    tolerance: f64,
-) -> Mesh {
-    // Use quantised coordinates as hash keys for O(1) merge lookup
-    let inv_tol = if tolerance > 0.0 {
-        1.0 / tolerance
-    } else {
-        1e9
-    };
-
-    let mut vertices: Vec<Vector3> = Vec::new();
-    let mut vertex_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
-    let mut faces = Vec::with_capacity(tri_indices.len());
-
-    let mut get_or_insert = |x: f64, y: f64, z: f64| -> usize {
-        let key = (
-            (x * inv_tol).round() as i64,
-            (y * inv_tol).round() as i64,
-            (z * inv_tol).round() as i64,
-        );
-        if let Some(&idx) = vertex_map.get(&key) {
-            idx
-        } else {
-            let idx = vertices.len();
-            vertices.push(Vector3::new(x, y, z));
-            vertex_map.insert(key, idx);
-            idx
-        }
-    };
-
-    for &ti in tri_indices {
-        let tri = &stl_mesh.triangles[ti];
-        let i0 = get_or_insert(
-            tri.vertices[0][0] * scale,
-            tri.vertices[0][1] * scale,
-            tri.vertices[0][2] * scale,
-        );
-        let i1 = get_or_insert(
-            tri.vertices[1][0] * scale,
-            tri.vertices[1][1] * scale,
-            tri.vertices[1][2] * scale,
-        );
-        let i2 = get_or_insert(
-            tri.vertices[2][0] * scale,
-            tri.vertices[2][1] * scale,
-            tri.vertices[2][2] * scale,
-        );
-        // Skip degenerate triangles
-        if i0 != i1 && i1 != i2 && i0 != i2 {
-            faces.push(MeshFace::triangle(i0, i1, i2));
-        }
-    }
-
-    let mut mesh = Mesh::new();
-    mesh.vertices = vertices;
-    mesh.faces = faces;
-    mesh.compute_edges();
-    mesh
+    assembler.finish()
 }
 
 #[cfg(test)]
@@ -334,6 +259,21 @@ mod tests {
         assert!(is_ascii_stl(b"solid test\n"));
         assert!(is_ascii_stl(b"solid \n"));
         assert!(!is_ascii_stl(b"not_solid\n"));
+    }
+
+    #[test]
+    fn binary_header_that_starts_with_solid_stays_binary() {
+        let mut data = vec![0u8; 84 + 50];
+        data[..6].copy_from_slice(b"solid ");
+        data[80..84].copy_from_slice(&1u32.to_le_bytes());
+        assert!(!is_ascii_stl(&data));
+        data.push(0);
+        assert!(!is_ascii_stl(&data));
+
+        let mut ascii = b"solid name\n".to_vec();
+        ascii.resize(100, b' ');
+        ascii.extend_from_slice(b"facet normal 0 0 1\n");
+        assert!(is_ascii_stl(&ascii));
     }
 
     #[test]

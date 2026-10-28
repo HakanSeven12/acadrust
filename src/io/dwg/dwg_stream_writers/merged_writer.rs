@@ -239,8 +239,8 @@ impl DwgMergedWriter {
         self.main.encode_legacy_text(text)
     }
 
-    pub fn write_bit_double_with_default(&mut self, def: f64, value: f64) {
-        self.main.write_bit_double_with_default(def, value);
+    pub fn write_bit_double_with_default(&mut self, value: f64, default: f64) {
+        self.main.write_bit_double_with_default(value, default);
     }
 
     pub fn write_2bit_double(&mut self, value: Vector2) {
@@ -259,12 +259,12 @@ impl DwgMergedWriter {
         self.main.write_3raw_double(value);
     }
 
-    pub fn write_2bit_double_with_default(&mut self, def: Vector2, value: Vector2) {
-        self.main.write_2bit_double_with_default(def, value);
+    pub fn write_2bit_double_with_default(&mut self, value: Vector2, default: Vector2) {
+        self.main.write_2bit_double_with_default(value, default);
     }
 
-    pub fn write_3bit_double_with_default(&mut self, def: Vector3, value: Vector3) {
-        self.main.write_3bit_double_with_default(def, value);
+    pub fn write_3bit_double_with_default(&mut self, value: Vector3, default: Vector3) {
+        self.main.write_3bit_double_with_default(value, default);
     }
 
     pub fn write_bit_thickness(&mut self, thickness: f64) {

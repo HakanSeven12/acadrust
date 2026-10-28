@@ -159,11 +159,11 @@ fn build_rich_document(version: DxfVersion) -> (CadDocument, usize) {
     count += 1;
 
     // ── Annotations ────────────────────────────────────────────────
-    doc.add_entity(EntityType::Leader(Leader::two_point(
-        Vector3::new(0.0, 0.0, 0.0),
-        Vector3::new(10.0, 10.0, 0.0),
-    )))
-    .unwrap();
+    // R2000+ DWG does not store the hook flag. This 45° text leader reads
+    // back hooked, so the source matches that derived state.
+    let mut leader = Leader::two_point(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0));
+    leader.hookline_enabled = true;
+    doc.add_entity(EntityType::Leader(leader)).unwrap();
     count += 1;
 
     doc.add_entity(EntityType::Dimension(Box::new(Dimension::Linear(
@@ -1458,9 +1458,7 @@ fn dwg_roundtrip_deep_r2000() {
     let rt = dwg_roundtrip(&doc);
     let report = compare_documents(&doc, &rt);
     assert_eq!(rt.classes.len(), 38);
-    // 13 plus the four style records R2000 keeps: the TABLESTYLE and
-    // MLEADERSTYLE dictionaries and their two Standard objects.
-    assert_eq!(rt.objects.len(), 17);
+    assert_eq!(rt.objects.len(), 13);
 
     let expected_profile_changes = ["Object count mismatch:", "Class count mismatch:"];
     let unexpected = DiffReport {
@@ -1694,13 +1692,12 @@ dwg_entity_roundtrip!(
         ]
     ))
 );
-dwg_entity_roundtrip!(
-    dwg_rt_leader,
-    EntityType::Leader(Leader::two_point(
-        Vector3::new(0.0, 0.0, 0.0),
-        Vector3::new(10.0, 10.0, 0.0)
-    ))
-);
+dwg_entity_roundtrip!(dwg_rt_leader, {
+    let mut leader = Leader::two_point(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0));
+    // R2000+ DWG derives the hook from this 45° last segment.
+    leader.hookline_enabled = true;
+    EntityType::Leader(leader)
+});
 dwg_entity_roundtrip!(
     dwg_rt_dimension,
     EntityType::Dimension(Box::new(Dimension::Linear(DimensionLinear::new(
@@ -2572,6 +2569,55 @@ fn hatch_elliptic_arc_edge_roundtrip() {
 }
 
 #[test]
+fn hatch_elliptic_edge_dxf_uses_circular_angles() {
+    // A 45° ray on a 2:1 ellipse meets the curve at parameter atan(2),
+    // about 63.4349°, point (4.472, 4.472) for a major axis of length 10.
+    // AutoCAD stores 45 in DXF groups 50/51 and the parameter in DWG.
+    let parameter = 1.107_148_717_794_090_4_f64;
+    let edge = BoundaryEdge::EllipticArc(EllipticArcEdge {
+        center: Vector2::new(0.0, 0.0),
+        major_axis_endpoint: Vector2::new(10.0, 0.0),
+        minor_axis_ratio: 0.5,
+        start_angle: 0.0,
+        end_angle: parameter,
+        counter_clockwise: true,
+    });
+    let mut flags = BoundaryPathFlags::new();
+    flags.set_external(true);
+    let doc = build_hatch_doc(vec![edge], flags);
+    let bytes = DxfWriter::new(&doc).write_to_vec().unwrap();
+    let text = String::from_utf8(bytes.clone()).unwrap();
+    let lines: Vec<_> = text.lines().map(str::trim).collect();
+    let mut elliptic = false;
+    let mut saw_end = false;
+    for pair in lines.chunks_exact(2) {
+        if pair[0] == "72" && pair[1] == "3" {
+            elliptic = true;
+        }
+        if elliptic && pair[0] == "51" {
+            let degrees: f64 = pair[1].parse().unwrap();
+            assert!(
+                (degrees - 45.0).abs() < 1e-6,
+                "group 51 should be the circular angle, got {degrees}"
+            );
+            saw_end = true;
+            break;
+        }
+    }
+    assert!(saw_end, "elliptic edge group 51 was not written");
+    let rt = DxfReader::from_reader(Cursor::new(bytes))
+        .unwrap()
+        .read()
+        .unwrap();
+    let path = extract_hatch_path(&rt);
+    let BoundaryEdge::EllipticArc(edge) = &path.edges[0] else {
+        panic!("Expected EllipticArc edge");
+    };
+    assert!((edge.end_angle - parameter).abs() < 1e-9);
+    assert!((edge.minor_axis_ratio - 0.5).abs() < 1e-12);
+}
+
+#[test]
 fn hatch_spline_edge_roundtrip() {
     let edge = BoundaryEdge::Spline(SplineEdge {
         degree: 3,
@@ -2849,7 +2895,11 @@ fn complex_linetype_upright_rotation_roundtrip() {
         doc
     };
     let upright = |doc: &CadDocument| {
-        let c = doc.line_types.get("GAS_LINE").expect("linetype lost").elements[1]
+        let c = doc
+            .line_types
+            .get("GAS_LINE")
+            .expect("linetype lost")
+            .elements[1]
             .complex
             .clone()
             .expect("complex lost");

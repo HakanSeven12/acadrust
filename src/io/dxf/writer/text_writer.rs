@@ -129,7 +129,7 @@ impl<W: Write> DxfTextWriter<W> {
         // Rust's `{}` Display for f64 emits the shortest decimal string that
         // round-trips back to the same value, and never uses exponent notation
         // for magnitudes in this branch's range (1e-15 ..= 1e15).  This matches
-        // AutoCAD's compact output (e.g. "943.920153") instead of dumping the
+        // ACAD's compact output (e.g. "943.920153") instead of dumping the
         // full 16-digit binary expansion of the float ("943.9201530000000275"),
         // which trimming trailing zeros cannot clean up because the tail digits
         // are rounding noise, not zeros.  write! into a Cursor<&mut [u8]> does

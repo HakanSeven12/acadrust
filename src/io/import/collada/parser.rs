@@ -11,6 +11,10 @@ use quick_xml::Reader;
 
 use crate::error::{DxfError, Result};
 
+use super::super::mesh::{
+    mul_matrix, rotation_axis_angle, scale_matrix, translation_matrix, IDENTITY,
+};
+
 /// A parsed COLLADA scene.
 #[derive(Debug, Clone)]
 pub struct ColladaScene {
@@ -156,7 +160,7 @@ pub fn parse_collada<R: BufRead>(reader: R) -> Result<ColladaScene> {
             scene.nodes.push(ColladaNode {
                 name: geom.name.clone(),
                 geometry_url: format!("#{}", geom.id),
-                transform: IDENTITY_MATRIX,
+                transform: IDENTITY,
                 material_bindings: HashMap::new(),
             });
         }
@@ -164,10 +168,6 @@ pub fn parse_collada<R: BufRead>(reader: R) -> Result<ColladaScene> {
 
     Ok(scene)
 }
-
-const IDENTITY_MATRIX: [f64; 16] = [
-    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-];
 
 // ─── Geometry parsing ────────────────────────────────────────────────────
 
@@ -629,10 +629,7 @@ fn parse_visual_scene<R: BufRead>(xml: &mut Reader<R>, nodes: &mut Vec<ColladaNo
                 let local = local_name(name.as_ref());
                 if local == b"node" {
                     let name = attr_string(e, b"name").unwrap_or_default();
-                    let node = parse_node(xml, &name, &mut depth)?;
-                    if let Some(n) = node {
-                        nodes.push(n);
-                    }
+                    nodes.extend(parse_node(xml, &name, &mut depth, IDENTITY)?);
                 }
             }
             Ok(Event::End(_)) => {
@@ -660,46 +657,45 @@ fn parse_node<R: BufRead>(
     xml: &mut Reader<R>,
     name: &str,
     depth: &mut u32,
-) -> Result<Option<ColladaNode>> {
-    let mut transform = IDENTITY_MATRIX;
+    parent: [f64; 16],
+) -> Result<Vec<ColladaNode>> {
+    // Transform elements are folded as they appear. A child node inherits the
+    // transforms seen so far; this node's own geometry uses the full list.
+    let mut local = IDENTITY;
     let mut geometry_url = String::new();
     let mut material_bindings: HashMap<String, String> = HashMap::new();
+    let mut instances = Vec::new();
     let mut buf = Vec::new();
 
     loop {
         match xml.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 *depth += 1;
-                let name = e.name();
-                let local = local_name(name.as_ref());
-                match local {
-                    b"matrix" => {
+                let element_name = e.name();
+                let local_tag = local_name(element_name.as_ref());
+                match local_tag {
+                    b"matrix" | b"translate" | b"rotate" | b"scale" => {
                         let text = read_text_content(xml, depth)?;
-                        let vals: Vec<f64> = text
-                            .split_whitespace()
-                            .filter_map(|s| s.parse::<f64>().ok())
-                            .collect();
-                        if vals.len() == 16 {
-                            // COLLADA matrices are row-major; convert to column-major
-                            transform = row_to_col_major(&vals);
+                        if let Some(element) = element_matrix(local_tag, &text) {
+                            local = mul_matrix(&element, &local);
                         }
                     }
                     b"instance_geometry" => {
                         geometry_url = attr_string(e, b"url").unwrap_or_default();
-                        // Parse bind_material inside
                         parse_instance_geometry_bindings(xml, depth, &mut material_bindings)?;
                     }
                     b"node" => {
-                        // Skip nested nodes for now
-                        skip_element(xml, depth)?;
+                        let child_name = attr_string(e, b"name").unwrap_or_default();
+                        let child_parent = mul_matrix(&parent, &local);
+                        instances.extend(parse_node(xml, &child_name, depth, child_parent)?);
                     }
                     _ => {}
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                let name = e.name();
-                let local = local_name(name.as_ref());
-                if local == b"instance_geometry" {
+                let element_name = e.name();
+                let local_tag = local_name(element_name.as_ref());
+                if local_tag == b"instance_geometry" {
                     geometry_url = attr_string(e, b"url").unwrap_or_default();
                 }
             }
@@ -716,15 +712,32 @@ fn parse_node<R: BufRead>(
         buf.clear();
     }
 
-    if geometry_url.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(ColladaNode {
+    if !geometry_url.is_empty() {
+        instances.push(ColladaNode {
             name: name.to_string(),
             geometry_url,
-            transform,
+            transform: mul_matrix(&parent, &local),
             material_bindings,
-        }))
+        });
+    }
+    Ok(instances)
+}
+
+fn element_matrix(kind: &[u8], text: &str) -> Option<[f64; 16]> {
+    let values: Vec<f64> = text
+        .split_whitespace()
+        .filter_map(|value| value.parse().ok())
+        .collect();
+    match kind {
+        b"matrix" if values.len() == 16 => Some(row_to_col_major(&values)),
+        b"translate" if values.len() >= 3 => {
+            Some(translation_matrix(values[0], values[1], values[2]))
+        }
+        b"scale" if values.len() >= 3 => Some(scale_matrix(values[0], values[1], values[2])),
+        b"rotate" if values.len() >= 4 => Some(rotation_axis_angle(
+            values[0], values[1], values[2], values[3],
+        )),
+        _ => None,
     }
 }
 
@@ -810,28 +823,6 @@ fn read_text_content<R: BufRead>(xml: &mut Reader<R>, depth: &mut u32) -> Result
     }
 
     Ok(text)
-}
-
-fn skip_element<R: BufRead>(xml: &mut Reader<R>, depth: &mut u32) -> Result<()> {
-    let mut buf = Vec::new();
-    loop {
-        match xml.read_event_into(&mut buf) {
-            Ok(Event::Start(_)) => {
-                *depth += 1;
-            }
-            Ok(Event::End(_)) => {
-                *depth -= 1;
-                break;
-            }
-            Ok(Event::Eof) => break,
-            Err(e) => {
-                return Err(DxfError::ImportError(format!("XML skip error: {}", e)));
-            }
-            _ => {}
-        }
-        buf.clear();
-    }
-    Ok(())
 }
 
 fn parse_float_list(text: &str) -> Vec<f64> {
@@ -956,6 +947,30 @@ mod tests {
             scene.nodes[0].material_bindings.get("mat_sym"),
             Some(&"material0".to_string())
         );
+    }
+
+    #[test]
+    fn nested_node_inherits_parent_translation() {
+        let dae = r##"<?xml version="1.0"?>
+<COLLADA>
+  <library_geometries>
+    <geometry id="geom0" name="Triangle"><mesh/></geometry>
+  </library_geometries>
+  <library_visual_scenes>
+    <visual_scene id="Scene">
+      <node name="Parent">
+        <translate>10 0 0</translate>
+        <node name="Child">
+          <instance_geometry url="#geom0"/>
+        </node>
+      </node>
+    </visual_scene>
+  </library_visual_scenes>
+</COLLADA>"##;
+        let scene = parse_collada(BufReader::new(dae.as_bytes())).unwrap();
+        assert_eq!(scene.nodes.len(), 1);
+        assert_eq!(scene.nodes[0].name, "Child");
+        assert!((scene.nodes[0].transform[12] - 10.0).abs() < 1e-12);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Header arrow blocks are names in DXF (`$DIMBLK` = `ArchTick`) and handles in
-//! a DWG. The block AutoCAD creates for that name is `_ArchTick`.
+//! a DWG. The block ACAD creates for that name is `_ArchTick`.
 
 use super::HeaderVariables;
 use crate::tables::{BlockRecord, Table};
@@ -135,7 +135,7 @@ fn name_is_blank(name: &str) -> bool {
     trimmed.is_empty() || trimmed == "."
 }
 
-/// AutoCAD's header stores `ArchTick` for the block `_ArchTick`.
+/// ACAD's header stores `ArchTick` for the block `_ArchTick`.
 fn dxf_name(block_name: &str) -> String {
     match block_name.strip_prefix('_') {
         Some(rest) if !rest.is_empty() => rest.to_string(),

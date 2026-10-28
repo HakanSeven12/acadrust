@@ -1,7 +1,7 @@
 use crate::{objects::ObjectType, CadDocument};
 
 /// Defaults for the modern layouts synthesized by the R12 DXF bridge.
-/// Independent AC1009 imports in AutoCAD 2024, 2025 and 2027 agree on these
+/// Independent AC1009 imports in ACAD 2024, 2025 and 2027 agree on these
 /// settings. Printer selection depends on the importing application profile
 /// and deliberately remains outside the native decoder.
 pub(super) fn apply_defaults(document: &mut CadDocument) {

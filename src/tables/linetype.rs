@@ -68,7 +68,7 @@ pub struct LineType {
     pub elements: Vec<LineTypeElement>,
     /// Total pattern length
     pub pattern_length: f64,
-    /// Alignment (always 'A' for AutoCAD)
+    /// Alignment (always 'A' for ACAD)
     pub alignment: char,
     /// Whether this linetype is externally dependent on an xref
     pub xref_dependent: bool,

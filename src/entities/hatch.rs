@@ -1,9 +1,7 @@
 //! Hatch entity and boundary path types
 
 use crate::entities::{Entity, EntityCommon};
-use crate::types::{
-    BoundingBox3D, Color, Handle, LineWeight, Transform, Transparency, Vector2, Vector3,
-};
+use crate::types::{BoundingBox3D, Color, Handle, Transform, Vector2, Vector3};
 
 /// Hatch pattern type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,9 +140,11 @@ pub struct CircularArcEdge {
     pub center: Vector2,
     /// Radius
     pub radius: f64,
-    /// Start angle in radians
+    /// Start angle in radians. A clockwise edge runs clockwise from
+    /// `-start_angle` to `-end_angle`, so the clockwise arc from 90° to 270°
+    /// is stored as 270° and 90°.
     pub start_angle: f64,
-    /// End angle in radians
+    /// End angle in radians. See [`Self::start_angle`].
     pub end_angle: f64,
     /// Counter-clockwise flag
     pub counter_clockwise: bool,
@@ -160,12 +160,46 @@ pub struct EllipticArcEdge {
     pub major_axis_endpoint: Vector2,
     /// Ratio of minor axis to major axis
     pub minor_axis_ratio: f64,
-    /// Start angle in radians
+    /// Start parameter, in radians. This is the ellipse parameter stored by
+    /// DWG, not the circular angle stored in DXF groups 50/51.
     pub start_angle: f64,
-    /// End angle in radians
+    /// End parameter, in radians. See [`Self::start_angle`].
     pub end_angle: f64,
     /// Counter-clockwise flag
     pub counter_clockwise: bool,
+}
+
+/// Move `value` by whole turns so it lies in the same revolution as `reference`.
+///
+/// A circular angle and its ellipse parameter share a quadrant, so the nearest
+/// turn is the matching one. That keeps 300° and 424° on the turn they were
+/// written in, including where `atan2` itself returns a negative principal value.
+fn same_revolution(value: f64, reference: f64) -> f64 {
+    let turn = std::f64::consts::TAU;
+    value + ((reference - value) / turn).round() * turn
+}
+
+/// Circular angle used by a DXF hatch elliptic edge, as an ellipse parameter.
+///
+/// Group 50/51 is the direction from the center, the same angle a circular
+/// arc would use. The parameter is the eccentric angle: a ray at circular
+/// angle `a` meets the ellipse at `atan2(sin(a) / ratio, cos(a))`. The result
+/// stays in the turn of `angle`, and a negative angle stays negative.
+pub(crate) fn circular_angle_to_ellipse_param(ratio: f64, angle: f64) -> f64 {
+    if !(ratio > 0.0 && ratio.is_finite() && angle.is_finite()) {
+        return angle;
+    }
+    let param = (angle.sin() / ratio).atan2(angle.cos());
+    same_revolution(param, angle)
+}
+
+/// Ellipse parameter written back to a DXF hatch elliptic edge as a circular angle.
+pub(crate) fn ellipse_param_to_circular_angle(ratio: f64, param: f64) -> f64 {
+    if !(ratio > 0.0 && ratio.is_finite() && param.is_finite()) {
+        return param;
+    }
+    let angle = (param.sin() * ratio).atan2(param.cos());
+    same_revolution(angle, param)
 }
 
 /// Spline edge in a boundary path
@@ -586,52 +620,12 @@ impl Default for Hatch {
 }
 
 impl Entity for Hatch {
-    fn handle(&self) -> Handle {
-        self.common.handle
+    fn common(&self) -> &super::EntityCommon {
+        &self.common
     }
 
-    fn set_handle(&mut self, handle: Handle) {
-        self.common.handle = handle;
-    }
-
-    fn layer(&self) -> &str {
-        &self.common.layer
-    }
-
-    fn set_layer(&mut self, layer: String) {
-        self.common.layer = layer;
-    }
-
-    fn color(&self) -> Color {
-        self.common.color
-    }
-
-    fn set_color(&mut self, color: Color) {
-        self.common.color = color;
-    }
-
-    fn line_weight(&self) -> LineWeight {
-        self.common.line_weight
-    }
-
-    fn set_line_weight(&mut self, weight: LineWeight) {
-        self.common.line_weight = weight;
-    }
-
-    fn transparency(&self) -> Transparency {
-        self.common.transparency
-    }
-
-    fn set_transparency(&mut self, transparency: Transparency) {
-        self.common.transparency = transparency;
-    }
-
-    fn is_invisible(&self) -> bool {
-        self.common.invisible
-    }
-
-    fn set_invisible(&mut self, invisible: bool) {
-        self.common.invisible = invisible;
+    fn common_mut(&mut self) -> &mut super::EntityCommon {
+        &mut self.common
     }
 
     fn bounding_box(&self) -> BoundingBox3D {

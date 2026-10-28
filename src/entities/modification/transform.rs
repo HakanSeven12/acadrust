@@ -959,7 +959,7 @@ pub(crate) fn transform_insert(e: &mut Insert, transform: &Transform) {
 
     // MINSERT spacing is measured in the INSERT's local X/Y axes.  Carry the
     // vectors through the same world transform so a nested array under a
-    // uniform parent scale grows with its geometry (AutoCAD doubles a 10-unit
+    // uniform parent scale grows with its geometry (ACAD doubles a 10-unit
     // spacing under a 2x parent).  A scalar spacing cannot encode shear, so
     // retain the transformed vector length, which is the closest representable
     // INSERT spacing and is exact for similarity transforms.  The sign comes
@@ -1440,6 +1440,7 @@ pub(crate) fn transform_invalidates_raw_record(entity: &EntityType) -> bool {
                 | ExtendedEntityData::Legacy(_)
                 | ExtendedEntityData::DynamicBlock(_)
                 | ExtendedEntityData::RegisteredClass(_)
+                | ExtendedEntityData::Arch(_)
         ),
         _ => true,
     }

@@ -17,13 +17,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::document::CadDocument;
-use crate::entities::mesh::{Mesh, MeshFace};
+use crate::entities::mesh::Mesh;
 use crate::entities::EntityType;
 use crate::error::{DxfError, Result};
-use crate::types::Vector3;
 
-use super::color_mapping::{create_material_layer, rgb_to_color};
-use super::ImportConfig;
+use super::color_mapping::{color_from_unit_rgb, create_material_layer};
+use super::mesh::mesh_from_indexed;
+use super::{read_path_bytes, read_reader_bytes, resolve_relative, ImportConfig};
 
 /// Parsed OBJ material from an MTL file.
 #[derive(Debug, Clone)]
@@ -53,15 +53,8 @@ impl ObjImporter {
     /// Create an importer from a file path.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let mut file = fs::File::open(path).map_err(|e| {
-            DxfError::ImportError(format!("Cannot open '{}': {}", path.display(), e))
-        })?;
-        let mut data = Vec::new();
-        file.read_to_end(&mut data).map_err(|e| {
-            DxfError::ImportError(format!("Cannot read '{}': {}", path.display(), e))
-        })?;
         Ok(Self {
-            data,
+            data: read_path_bytes(path)?,
             base_dir: path.parent().map(|p| p.to_path_buf()),
             config: ImportConfig::default(),
         })
@@ -77,13 +70,9 @@ impl ObjImporter {
     }
 
     /// Create an importer from a reader (no MTL resolution).
-    pub fn from_reader<R: Read>(mut reader: R) -> Result<Self> {
-        let mut data = Vec::new();
-        reader
-            .read_to_end(&mut data)
-            .map_err(|e| DxfError::ImportError(format!("Cannot read OBJ data: {}", e)))?;
+    pub fn from_reader<R: Read>(reader: R) -> Result<Self> {
         Ok(Self {
-            data,
+            data: read_reader_bytes(reader, "OBJ data")?,
             base_dir: None,
             config: ImportConfig::default(),
         })
@@ -99,23 +88,22 @@ impl ObjImporter {
     pub fn import(&self) -> Result<CadDocument> {
         let text = String::from_utf8_lossy(&self.data);
         let (vertices, groups, mtl_files) = parse_obj(&text)?;
-        let materials = self.load_materials(&mtl_files);
+        let materials = self.load_materials(&mtl_files)?;
         self.build_document(&vertices, &groups, &materials)
     }
 
-    fn load_materials(&self, mtl_files: &[String]) -> HashMap<String, ObjMaterial> {
+    fn load_materials(&self, mtl_files: &[String]) -> Result<HashMap<String, ObjMaterial>> {
         let mut materials = HashMap::new();
-        let base_dir = match &self.base_dir {
-            Some(d) => d,
-            None => return materials,
+        let Some(base_dir) = &self.base_dir else {
+            return Ok(materials);
         };
         for mtl_file in mtl_files {
-            let mtl_path = base_dir.join(mtl_file);
+            let mtl_path = resolve_relative(base_dir, mtl_file)?;
             if let Ok(content) = fs::read_to_string(&mtl_path) {
                 parse_mtl(&content, &mut materials);
             }
         }
-        materials
+        Ok(materials)
     }
 
     fn build_document(
@@ -133,12 +121,7 @@ impl ObjImporter {
             }
 
             let (layer_name, color) = if let Some(mat) = materials.get(&group.material) {
-                let c = rgb_to_color(
-                    (mat.diffuse[0] * 255.0) as u8,
-                    (mat.diffuse[1] * 255.0) as u8,
-                    (mat.diffuse[2] * 255.0) as u8,
-                    true,
-                );
+                let c = color_from_unit_rgb(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
                 (
                     create_material_layer(&mut doc, &self.config.layer_prefix, &mat.name, c),
                     c,
@@ -167,6 +150,9 @@ impl ObjImporter {
                 self.config.merge_vertices,
                 self.config.merge_tolerance,
             );
+            if mesh.faces.is_empty() {
+                continue;
+            }
             let mut mesh_entity = mesh;
             mesh_entity.common.layer = layer_name;
             mesh_entity.common.color = color;
@@ -342,27 +328,7 @@ fn build_mesh_from_faces(
 }
 
 fn build_unmerged_obj(positions: &[[f64; 3]], triangles: &[[usize; 3]], scale: f64) -> Mesh {
-    let mut verts = Vec::with_capacity(triangles.len() * 3);
-    let mut faces = Vec::with_capacity(triangles.len());
-
-    for tri in triangles {
-        let base = verts.len();
-        for &idx in tri {
-            if idx < positions.len() {
-                let p = positions[idx];
-                verts.push(Vector3::new(p[0] * scale, p[1] * scale, p[2] * scale));
-            } else {
-                verts.push(Vector3::ZERO);
-            }
-        }
-        faces.push(MeshFace::triangle(base, base + 1, base + 2));
-    }
-
-    let mut mesh = Mesh::new();
-    mesh.vertices = verts;
-    mesh.faces = faces;
-    mesh.compute_edges();
-    mesh
+    mesh_from_indexed(positions, triangles, scale, false, 0.0)
 }
 
 fn build_merged_obj(
@@ -371,63 +337,7 @@ fn build_merged_obj(
     scale: f64,
     tolerance: f64,
 ) -> Mesh {
-    let inv_tol = if tolerance > 0.0 {
-        1.0 / tolerance
-    } else {
-        1e9
-    };
-    let mut mesh_verts: Vec<Vector3> = Vec::new();
-    let mut vert_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
-    let mut faces = Vec::with_capacity(triangles.len());
-
-    let mut get_or_insert = |p: [f64; 3]| -> usize {
-        let x = p[0] * scale;
-        let y = p[1] * scale;
-        let z = p[2] * scale;
-        let key = (
-            (x * inv_tol).round() as i64,
-            (y * inv_tol).round() as i64,
-            (z * inv_tol).round() as i64,
-        );
-        if let Some(&idx) = vert_map.get(&key) {
-            idx
-        } else {
-            let idx = mesh_verts.len();
-            mesh_verts.push(Vector3::new(x, y, z));
-            vert_map.insert(key, idx);
-            idx
-        }
-    };
-
-    for tri in triangles {
-        let p0 = if tri[0] < positions.len() {
-            positions[tri[0]]
-        } else {
-            [0.0; 3]
-        };
-        let p1 = if tri[1] < positions.len() {
-            positions[tri[1]]
-        } else {
-            [0.0; 3]
-        };
-        let p2 = if tri[2] < positions.len() {
-            positions[tri[2]]
-        } else {
-            [0.0; 3]
-        };
-        let i0 = get_or_insert(p0);
-        let i1 = get_or_insert(p1);
-        let i2 = get_or_insert(p2);
-        if i0 != i1 && i1 != i2 && i0 != i2 {
-            faces.push(MeshFace::triangle(i0, i1, i2));
-        }
-    }
-
-    let mut mesh = Mesh::new();
-    mesh.vertices = mesh_verts;
-    mesh.faces = faces;
-    mesh.compute_edges();
-    mesh
+    mesh_from_indexed(positions, triangles, scale, true, tolerance)
 }
 
 #[cfg(test)]
@@ -501,5 +411,12 @@ mod tests {
         let obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf -3 -2 -1\n";
         let (_, groups, _) = parse_obj(obj).unwrap();
         assert_eq!(groups[0].faces[0], vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn missing_vertex_index_does_not_create_a_face() {
+        let obj = b"v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 99\n";
+        let doc = ObjImporter::from_bytes(obj.to_vec()).import().unwrap();
+        assert_eq!(doc.entities().count(), 0);
     }
 }

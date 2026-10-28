@@ -233,6 +233,25 @@ fn validate_unknown_records(document: &CadDocument) -> Result<()> {
                 entity.common().handle
             )));
         }
+        if let crate::entities::EntityType::Extended(entity) = entity {
+            if let crate::entities::ExtendedEntityData::Arch(data) = &entity.data {
+                if data.raw_dwg_data.is_none()
+                    || data
+                        .dwg_source_version
+                        .is_some_and(|version| version != document.version)
+                    || document.version == DxfVersion::AC1009
+                {
+                    return Err(DxfError::NotImplemented(format!(
+                        "Cannot encode Arch entity {} at handle {} as DWG {:?}: compatible raw DWG data is required",
+                        data.dxf_name, entity.common.handle, document.version
+                    )));
+                }
+                crate::io::dwg::dwg_stream_writers::DwgObjectWriter::validate_architecture_record(
+                    data,
+                    document.version,
+                )?;
+            }
+        }
         if let crate::entities::EntityType::Unknown(entity) = entity {
             if entity.raw_dwg_data.is_none()
                 || entity
@@ -248,17 +267,34 @@ fn validate_unknown_records(document: &CadDocument) -> Result<()> {
         }
     }
     for object in document.objects.values() {
+        if let crate::objects::ObjectType::Arch(object) = object {
+            if object.raw_dwg_data.is_none()
+                || object
+                    .raw_dwg_version
+                    .is_some_and(|version| version != document.version)
+                || document.version == DxfVersion::AC1009
+            {
+                return Err(DxfError::NotImplemented(format!(
+                    "Cannot encode Arch object {} at handle {} as DWG {:?}: compatible raw DWG data is required",
+                    object.dxf_name, object.handle, document.version
+                )));
+            }
+            DwgObjectWriter::validate_architecture_object(object, document.version)?;
+        }
         if let crate::objects::ObjectType::DynamicBlock(value) = object {
             if let crate::objects::DynamicBlockData::PropertiesTable(table) = &value.data {
-                let supported = table.fields.iter().all(|field| match (field.code, &field.value) {
-                    (90..=99, crate::objects::BlockPropertiesTableValue::Integer(_))
-                    | (170..=179, crate::objects::BlockPropertiesTableValue::Integer(_))
-                    | (290..=299, crate::objects::BlockPropertiesTableValue::Boolean(_))
-                    | (140..=149, crate::objects::BlockPropertiesTableValue::Real(_))
-                    | (300..=309, crate::objects::BlockPropertiesTableValue::Text(_))
-                    | (340..=349, crate::objects::BlockPropertiesTableValue::Handle(_)) => true,
-                    _ => false,
-                });
+                let supported = table
+                    .fields
+                    .iter()
+                    .all(|field| match (field.code, &field.value) {
+                        (90..=99, crate::objects::BlockPropertiesTableValue::Integer(_))
+                        | (170..=179, crate::objects::BlockPropertiesTableValue::Integer(_))
+                        | (290..=299, crate::objects::BlockPropertiesTableValue::Boolean(_))
+                        | (140..=149, crate::objects::BlockPropertiesTableValue::Real(_))
+                        | (300..=309, crate::objects::BlockPropertiesTableValue::Text(_))
+                        | (340..=349, crate::objects::BlockPropertiesTableValue::Handle(_)) => true,
+                        _ => false,
+                    });
                 if !supported {
                     return Err(DxfError::NotImplemented(format!(
                         "Cannot encode Block Properties Table at handle {} as DWG: a field uses an unsupported value type",
@@ -268,7 +304,11 @@ fn validate_unknown_records(document: &CadDocument) -> Result<()> {
             }
         }
         if let crate::objects::ObjectType::Unknown {
-            type_name, handle, raw_dwg_data, raw_dwg_version, ..
+            type_name,
+            handle,
+            raw_dwg_data,
+            raw_dwg_version,
+            ..
         } = object
         {
             if raw_dwg_data.is_none()
@@ -932,9 +972,8 @@ fn add_missing_classes(document: &mut CadDocument) {
 
 /// Bring a document into shape for a version older than the one it came from.
 ///
-/// Today that means only the viewport table: R14 and older expect a VxTable
-/// record per viewport. Style dictionaries are deliberately left alone - see
-/// the note at the end of this function.
+/// R14 and older expect a VxTable record per viewport. Style dictionaries are
+/// removed before the version that introduced their objects.
 fn prepare_legacy_document(document: &mut CadDocument) {
     if document.version <= DxfVersion::AC1014 {
         let missing: Vec<_> = document
@@ -971,13 +1010,35 @@ fn prepare_legacy_document(document: &mut CadDocument) {
         }
     }
 
-    // Style dictionaries stay in the file whatever the target version.
-    //
-    // ACAD_TABLESTYLE and ACAD_MLEADERSTYLE used to be deleted below R2004
-    // and R2010, with the dictionary and the style object each entry holds.
-    // Other records point at those handles, so removing the styles left
-    // dangling references behind; a drawing saved at any of those versions
-    // still carries both entries and both style objects.
+    // TABLESTYLE is an R2004 object. MLEADERSTYLE is an R2007 object.
+    // R2004 saves keep ACAD_MLEADERSTYLE when that class is already declared,
+    // in the pre-R2010 record layout. Older saves drop the dictionary and the
+    // style object it holds.
+    use crate::objects::ObjectType;
+    let keep_mleader_style = document.version >= DxfVersion::AC1018
+        && document.classes.get_by_name("MLEADERSTYLE").is_some();
+    let root_handle = document.header.named_objects_dict_handle;
+    let mut obsolete = Vec::new();
+    if let Some(ObjectType::Dictionary(root)) = document.objects.get_mut(&root_handle) {
+        root.entries.retain(|(name, handle)| {
+            let remove = (name == "ACAD_MLEADERSTYLE"
+                && document.version < DxfVersion::AC1021
+                && !keep_mleader_style)
+                || (name == "ACAD_TABLESTYLE" && document.version < DxfVersion::AC1018);
+            if remove {
+                obsolete.push(*handle);
+            }
+            !remove
+        });
+    }
+
+    for handle in obsolete {
+        if let Some(ObjectType::Dictionary(dictionary)) = document.objects.remove(&handle) {
+            for (_, child) in dictionary.entries {
+                document.objects.remove(&child);
+            }
+        }
+    }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1184,6 +1245,41 @@ fn prepare_header(
         }
     }
 
+    // ── Current text and dimension styles by name ──
+    // A DXF names them ($TEXTSTYLE, $DIMSTYLE); the handles read with it need not be those styles' handles
+    // in this document, and the DWG stores only handles, so AutoCAD opened the drawing with Standard current.
+    // Ported from CADCraft's DWG bridge (storytold/cadcraft #1051, #1650; MIT OR Apache-2.0).
+    if let Some(s) = document
+        .text_styles
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&h.current_text_style_name))
+    {
+        let is_default_name = h.current_text_style_name.eq_ignore_ascii_case("Standard");
+        let handle_is_valid_custom = !h.current_text_style_handle.is_null()
+            && document
+                .text_styles
+                .iter()
+                .any(|t| t.handle == h.current_text_style_handle && !t.name.eq_ignore_ascii_case("Standard"));
+        if !is_default_name || !handle_is_valid_custom {
+            h.current_text_style_handle = s.handle;
+        }
+    }
+    if let Some(s) = document
+        .dim_styles
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&h.current_dimstyle_name))
+    {
+        let is_default_name = h.current_dimstyle_name.eq_ignore_ascii_case("Standard");
+        let handle_is_valid_custom = !h.current_dimstyle_handle.is_null()
+            && document
+                .dim_styles
+                .iter()
+                .any(|d| d.handle == h.current_dimstyle_handle && !d.name.eq_ignore_ascii_case("Standard"));
+        if !is_default_name || !handle_is_valid_custom {
+            h.current_dimstyle_handle = s.handle;
+        }
+    }
+
     // The header reader can produce garbage (multi-byte) handle values
     // when the bit stream is misaligned.  Unconditionally sync every
     // "current style" handle so that garbage values are overwritten
@@ -1281,7 +1377,9 @@ fn prepare_header(
         }
     }
 
-    // dim_text_style_handle — validate against text styles
+    // dim_text_style_handle — DXF names the style, a DWG stores its handle.
+    // A null or dangling handle selects the style the name gives; when that
+    // names nothing, fall back to Standard.
     {
         let dts_valid = !h.dim_text_style_handle.is_null()
             && document
@@ -1291,7 +1389,8 @@ fn prepare_header(
         if !dts_valid {
             h.dim_text_style_handle = document
                 .text_styles
-                .get("Standard")
+                .get(&h.dim_text_style_name)
+                .or_else(|| document.text_styles.get("Standard"))
                 .map(|s| s.handle)
                 .unwrap_or(Handle::NULL);
         }
@@ -1310,20 +1409,29 @@ fn prepare_header(
         }
     }
 
-    // ── Validate dim linetype handles against actual linetypes ──
-    // These can become corrupt during header read/write due to stream alignment.
+    // ── Resolve and validate dim linetype handles against actual linetypes ──
+    // DXF names them and a DWG stores their handles, so a null or dangling
+    // handle takes the handle of the linetype the name gives.
     {
-        let valid_lt = |h: Handle| -> bool {
-            h.is_null() || document.line_types.iter().any(|lt| lt.handle == h)
-        };
-        if !valid_lt(h.dim_linetype_handle) {
-            h.dim_linetype_handle = Handle::NULL;
-        }
-        if !valid_lt(h.dim_linetype1_handle) {
-            h.dim_linetype1_handle = Handle::NULL;
-        }
-        if !valid_lt(h.dim_linetype2_handle) {
-            h.dim_linetype2_handle = Handle::NULL;
+        let names = [
+            h.dim_linetype_name.clone(),
+            h.dim_linetype1_name.clone(),
+            h.dim_linetype2_name.clone(),
+        ];
+        for (handle, name) in [
+            (&mut h.dim_linetype_handle, &names[0]),
+            (&mut h.dim_linetype1_handle, &names[1]),
+            (&mut h.dim_linetype2_handle, &names[2]),
+        ] {
+            let valid =
+                !handle.is_null() && document.line_types.iter().any(|lt| lt.handle == *handle);
+            if !valid {
+                *handle = document
+                    .line_types
+                    .get(name)
+                    .map(|lt| lt.handle)
+                    .unwrap_or(Handle::NULL);
+            }
         }
     }
 
@@ -1509,7 +1617,7 @@ fn write_ac18<W: Write + Seek>(
     // R2010+ per-section "extra RL" (which locates the header/classes string
     // stream) on `maintenance_version > 3`. A fresh document defaults to 0,
     // which for R2013 (AC1027) omits that RL and makes the header string
-    // stream unreadable in AutoCAD/TrueView. Use the canonical per-version
+    // stream unreadable in ACAD/TrueView. Use the canonical per-version
     // value so R2013 files are always well-formed.
     let maint = aux_header_writer::dwg_maintenance_version(version) as u8;
 
@@ -2118,31 +2226,35 @@ fn build_acds_prototype(sab_entries: &[(Handle, Vec<u8>)]) -> Vec<u8> {
 
 /// Build the AcDsPrototype_1b file header ("jard", 128 bytes).
 ///
-/// Fourteen little-endian `RL` fields per the ODA datastore layout (field names
-/// follow libredwg's `acds.spec`), then zero padding to 128 bytes. A strict
-/// reader validates these; a wrong `ds_version` in particular
-/// made the whole section read as "invalid data". The segment ordering emitted
+/// Fourteen little-endian 32-bit fields in ODA §24.1 order, followed by zero
+/// padding to the declared header size. Data storage revision is distinct
+/// from the preceding version field. The segment ordering emitted
 /// by [`build_acds_prototype`] is fixed (segidx=1, _data_=2, thumbnail=3,
 /// datidx=4, schdat=5, schidx=6, search=7), so the `*_segidx` pointers are
 /// constant.
 fn build_acds_jard_header(segidx_offset: u32, file_size: u32) -> Vec<u8> {
-    let mut h = vec![0u8; 128];
-    h[0..4].copy_from_slice(b"jard"); // file_signature
-    h[4..8].copy_from_slice(&128u32.to_le_bytes()); // file_header_size
-    h[8..12].copy_from_slice(&2u32.to_le_bytes()); // unknown_1 (always 2)
-    h[12..16].copy_from_slice(&2u32.to_le_bytes()); // version (always 2)
-    h[16..20].copy_from_slice(&0u32.to_le_bytes()); // unknown_2 (always 0)
-    h[20..24].copy_from_slice(&1u32.to_le_bytes()); // ds_version (datastore revision)
-    h[24..28].copy_from_slice(&segidx_offset.to_le_bytes()); // segidx_offset
-    h[28..32].copy_from_slice(&0u32.to_le_bytes()); // segidx_unknown
-    h[32..36].copy_from_slice(&8u32.to_le_bytes()); // num_segidx (null + 7 segments)
-    h[36..40].copy_from_slice(&6u32.to_le_bytes()); // schidx_segidx
-    h[40..44].copy_from_slice(&4u32.to_le_bytes()); // datidx_segidx
-    h[44..48].copy_from_slice(&7u32.to_le_bytes()); // search_segidx
-    h[48..52].copy_from_slice(&0u32.to_le_bytes()); // prvsav_segidx
-    h[52..56].copy_from_slice(&file_size.to_le_bytes()); // file_size
-                                                         // Remaining bytes are zero (padding to file_header_size).
-    h
+    let fields = [
+        u32::from_le_bytes(*b"jard"), // file signature
+        128,                          // file header size
+        2,                            // unknown 1
+        2,                            // version
+        0,                            // unknown 2
+        1,                            // data storage revision
+        segidx_offset,                // segment index offset
+        0,                            // segment index unknown
+        8,                            // segment index entry count (null + 7)
+        6,                            // schema index segment index
+        4,                            // data index segment index
+        7,                            // search segment index
+        0,                            // previous save index
+        file_size,
+    ];
+    let mut header = Vec::with_capacity(fields[1] as usize);
+    for field in fields {
+        header.extend_from_slice(&field.to_le_bytes());
+    }
+    header.resize(fields[1] as usize, 0);
+    header
 }
 
 /// Build `_data_` segment id=2 containing one SAB record per ACIS entity.
@@ -3140,13 +3252,11 @@ mod tests {
         let mut reader = crate::io::dwg::DwgReader::from_stream(std::io::Cursor::new(bytes));
         let decoded = reader.read().unwrap();
 
-        // Mirrors the compact profile of R2000 fixtures: they keep
-        // ACAD_TABLESTYLE and ACAD_MLEADERSTYLE with the Standard style
-        // objects those entries hold.
+        // Mirrors the compact profile in validated R2000 fixtures.
         let mut expected = doc.classes.clone();
         expected.retain_legacy_dwg_classes();
         assert_eq!(decoded.classes.len(), expected.len());
-        assert_eq!(decoded.objects.len(), 17);
+        assert_eq!(decoded.objects.len(), 13);
     }
 
     #[test]
@@ -3714,4 +3824,3 @@ mod tests {
         ));
     }
 }
-

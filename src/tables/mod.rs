@@ -14,12 +14,28 @@
 //! | [`VPort`] | Viewport configurations |
 //! | [`Ucs`] | User coordinate systems |
 
+use crate::error::DxfError;
 use crate::types::Handle;
 use indexmap::IndexMap;
 
 /// Normalize a symbol-table name for case-insensitive lookup.
+///
+/// Names compare as AutoCAD compares them, the way Windows compares names without regard to
+/// case: each letter is upper-cased to a single letter, and a letter outside ASCII never becomes
+/// an ASCII one. So `ölçü` is `ÖLÇÜ`, but the Turkish dotless `ı` stays apart from `I` (AutoCAD
+/// keeps the layers `YAZI` and `Yazı` side by side), and `ß` is not `SS`.
 pub fn normalize_name(name: &str) -> String {
-    name.to_uppercase()
+    name.chars().map(upper_case).collect()
+}
+
+/// `c` upper-cased, when that gives one letter and does not turn a letter outside ASCII into an
+/// ASCII one; `c` itself otherwise.
+fn upper_case(c: char) -> char {
+    let mut upper = c.to_uppercase();
+    match (upper.next(), upper.next()) {
+        (Some(u), None) if c.is_ascii() || !u.is_ascii() => u,
+        _ => c,
+    }
 }
 
 /// Whether a stored lookup key still describes `name`.
@@ -114,10 +130,10 @@ impl<T: TableEntry> Table<T> {
     }
 
     /// Add an entry to the table
-    pub fn add(&mut self, entry: T) -> Result<(), String> {
+    pub fn add(&mut self, entry: T) -> Result<(), DxfError> {
         let name = normalize_name(entry.name());
         if self.entries.contains_key(&name) {
-            return Err(format!("Entry '{}' already exists in table", entry.name()));
+            return Err(format!("Entry '{}' already exists in table", entry.name()).into());
         }
         self.entries.insert(name, entry);
         Ok(())
@@ -174,15 +190,15 @@ impl<T: TableEntry> Table<T> {
     }
 
     /// Rename an entry without changing its handle or table position.
-    pub fn rename(&mut self, old_name: &str, new_name: impl Into<String>) -> Result<(), String> {
+    pub fn rename(&mut self, old_name: &str, new_name: impl Into<String>) -> Result<(), DxfError> {
         let new_name = new_name.into();
         let old_key = normalize_name(old_name);
         let new_key = normalize_name(&new_name);
         let Some(index) = self.entries.get_index_of(&old_key) else {
-            return Err(format!("Entry '{old_name}' does not exist in table"));
+            return Err(format!("Entry '{old_name}' does not exist in table").into());
         };
         if old_key != new_key && self.entries.contains_key(&new_key) {
-            return Err(format!("Entry '{new_name}' already exists in table"));
+            return Err(format!("Entry '{new_name}' already exists in table").into());
         }
         if old_key == new_key {
             self.entries[index].set_name(new_name);

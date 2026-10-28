@@ -414,8 +414,8 @@ fn read_xref_table_flags(reader: &mut DwgMergedReader, version: DwgVersion) -> X
     if version.r2007_plus() {
         let resolved = reader.read_bit_short() == 256;
         XrefTableFlags {
-            // R2007+ no longer stores the "referenced" (64) flag. AutoCAD
-            // writes 0 for it, and a set bit makes AutoCAD reject "*Multiple"
+            // R2007+ no longer stores the "referenced" (64) flag. ACAD
+            // writes 0 for it, and a set bit makes ACAD reject "*Multiple"
             // VPORT records in DXF.
             reference: false,
             resolved,

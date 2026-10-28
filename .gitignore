@@ -27,6 +27,8 @@ Thumbs.db
 *.dwl2
 *.dmp
 /crash_report.txt
+/ErrorReports/
+/*.log
 
 
 

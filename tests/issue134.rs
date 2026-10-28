@@ -30,6 +30,9 @@ fn auxiliary_fixture(
             if name == CONTEXT {
                 writer.write_bit_short(4);
                 writer.write_bit(true);
+                if version >= DxfVersion::AC1024 {
+                    writer.write_bit(true); // R2010+ has-file-to-xdict flag.
+                }
                 writer.write_handle(DwgReferenceType::HardPointer, scale.value());
                 writer.write_bit_long(i32::MAX);
             }
@@ -254,19 +257,16 @@ fn broken_common_metadata_and_wrong_handles_still_fail_strict_reads() {
 
 #[test]
 fn failsafe_keeps_a_framed_object_and_returns_the_decode_error() {
-    let (source, healthy, auxiliary, ..) = auxiliary_fixture(
-        DxfVersion::AC1032,
-        "CONTEXTDATAMANAGER",
-        540,
-        false,
-        false,
-    );
+    let (source, healthy, auxiliary, ..) =
+        auxiliary_fixture(DxfVersion::AC1032, "CONTEXTDATAMANAGER", 540, false, false);
     let bytes = DwgWriter::write_to_vec(&source).unwrap();
     let strict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         DwgReader::from_stream(Cursor::new(bytes.clone())).read()
     }))
     .expect("strict read must not panic");
-    let error = strict.expect_err("strict read reports the bad record").to_string();
+    let error = strict
+        .expect_err("strict read reports the bad record")
+        .to_string();
     assert!(error.starts_with("Parse error:"), "{error}");
     assert!(!error.contains("panicked"), "{error}");
 
@@ -409,13 +409,13 @@ fn strict_error_identifies_the_failed_record_after_auxiliary_recovery() {
 }
 
 #[test]
-fn native_mleader_base_layout_is_preserved_without_fabricated_context_fields() {
+fn native_mleader_base_flags_and_context_payload_decode_from_oda_layout() {
     use acadrust::types::Vector3;
 
-    // ODA DWG specification 27.5, pp. 218-219: BS version, B file-to-xdict,
-    // B default. Encode this independently of this library's context writer,
-    // which follows the one-flag layout also used by LibreDWG.
-    let (source, healthy, auxiliary, raw, _) = auxiliary_fixture_with_payload(
+    // ODA DWG specification §20.4.89 (pp. 219): BS version,
+    // B file-to-xdict, B default. The following MLeader context fields are
+    // encoded in the order from §20.4.86 (pp. 214-216).
+    let (source, healthy, auxiliary, _raw, _) = auxiliary_fixture_with_payload(
         DxfVersion::AC1032,
         CONTEXT,
         540,
@@ -450,7 +450,7 @@ fn native_mleader_base_layout_is_preserved_without_fabricated_context_fields() {
                 writer.write_3bit_double(vector);
             }
             writer.write_bit(false);
-            writer.write_bit_short(9);
+            writer.write_bit_short(8); // Distinct top attachment value.
             writer.write_bit_short(9);
         },
     );
@@ -459,13 +459,28 @@ fn native_mleader_base_layout_is_preserved_without_fabricated_context_fields() {
         .unwrap();
     assert_eq!(outcome.stats.skipped_source_records, 0);
     assert!(outcome.document.get_entity(healthy).is_some());
-    assert!(outcome
-        .stats
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == "auxiliary-object-preserved"));
-    assert!(matches!(outcome.document.objects.get(&auxiliary),
-        Some(ObjectType::Unknown { raw_dwg_data: Some(data), .. }) if data == &raw));
+    assert!(outcome.stats.diagnostics.is_empty());
+    let Some(ObjectType::ObjectContextData(context)) = outcome.document.objects.get(&auxiliary)
+    else {
+        panic!("ODA-layout MLeader context should be modeled");
+    };
+    assert_eq!(context.class_version, 4);
+    assert!(context.has_file_to_extension_dictionary);
+    assert!(!context.uses_legacy_mleader_context_base);
+    assert!(!context.is_default);
+    assert_eq!(context.scale, outcome.document.context_scales[&auxiliary]);
+    let ObjectContextKind::MLeader(context) = &context.kind else {
+        panic!("ODA-layout MLeader payload should decode as MLeader context");
+    };
+    assert_eq!(context.leader_roots.len(), 1);
+    assert_eq!(
+        context.text_top_attachment,
+        acadrust::entities::TextAttachmentType::from(8)
+    );
+    assert_eq!(
+        context.text_bottom_attachment,
+        acadrust::entities::TextAttachmentType::from(9)
+    );
 }
 
 #[test]
@@ -530,12 +545,16 @@ fn valid_mleader_context_still_decodes_to_fields_without_recovery() {
     let mut context = acadrust::entities::MultiLeaderAnnotContext::new();
     context.standalone_uses_root_flags = true;
     context.set_text_content("issue134", acadrust::types::Vector3::new(1.0, 2.0, 3.0));
+    context.text_top_attachment = acadrust::entities::TextAttachmentType::from(8);
+    context.text_bottom_attachment = acadrust::entities::TextAttachmentType::from(9);
     let object = ObjectContextData {
         handle: auxiliary,
         owner_handle: Handle::NULL,
         reactors: Vec::new(),
         xdictionary_handle: None,
         class_version: 4,
+        has_file_to_extension_dictionary: true,
+        uses_legacy_mleader_context_base: false,
         is_default: true,
         scale: scale_handle,
         kind: ObjectContextKind::MLeader(context),
@@ -553,4 +572,26 @@ fn valid_mleader_context_still_decodes_to_fields_without_recovery() {
         ObjectType::ObjectContextData(object)
     );
     assert_eq!(outcome.document.context_scales[&auxiliary], scale_handle);
+
+    // Native AutoCAD captures use a historical MLeader base with only the
+    // default flag. Preserve and re-emit that layout independently of the
+    // generic ODA R2010+ base above.
+    let ObjectType::ObjectContextData(mut legacy_object) = source.objects[&auxiliary].clone()
+    else {
+        panic!("source context object should be modeled");
+    };
+    legacy_object.uses_legacy_mleader_context_base = true;
+    source.objects.insert(
+        auxiliary,
+        ObjectType::ObjectContextData(legacy_object.clone()),
+    );
+    let bytes = DwgWriter::write_to_vec(&source).unwrap();
+    let legacy_outcome = DwgReader::from_stream(Cursor::new(bytes))
+        .read_with_stats()
+        .unwrap();
+    assert!(legacy_outcome.stats.diagnostics.is_empty());
+    assert_eq!(
+        legacy_outcome.document.objects[&auxiliary],
+        ObjectType::ObjectContextData(legacy_object)
+    );
 }

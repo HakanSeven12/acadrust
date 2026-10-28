@@ -1211,8 +1211,12 @@ fn bs3_tokens(net: &SplineNet) -> Vec<SatToken> {
     if net.rational {
         tokens.push(id("both"));
     }
-    tokens.push(SatToken::Enum(if net.u_closed { "closed" } else { "open" }.to_string()));
-    tokens.push(SatToken::Enum(if net.v_closed { "closed" } else { "open" }.to_string()));
+    tokens.push(SatToken::Enum(
+        if net.u_closed { "closed" } else { "open" }.to_string(),
+    ));
+    tokens.push(SatToken::Enum(
+        if net.v_closed { "closed" } else { "open" }.to_string(),
+    ));
     tokens.push(SatToken::Enum("none".to_string()));
     tokens.push(SatToken::Enum("none".to_string()));
     tokens.push(SatToken::Integer(net.u_knots.len() as i64));

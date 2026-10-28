@@ -6,9 +6,13 @@
 //! Each leaf is a concrete `ACDB_<TYPE>OBJECTCONTEXTDATA_CLASS` object sharing a
 //! common base:
 //!
-//! - `AcDbObjectContextData`: `70` class_version (BS), `290` is_default (B).
+//! - `AcDbObjectContextData`: `70` class_version (BS) and the default flag
+//!   (B). AutoCAD does not store the file-to-extension-dictionary bit that
+//!   ODA §20.4.89 documents for R2010+; that bit is kept only for an MLeader
+//!   leaf read from the ODA layout.
 //! - `AcDbAnnotScaleObjectContextData`: `340` handle → the `AcDbScale` this
-//!   representation applies to (rides the object handle stream).
+//!   representation applies to (the hard pointer follows the context base in
+//!   the object handle stream; ODA §20.4.71).
 //!
 //! followed by a type-specific placement payload ([`ObjectContextKind`]).
 //!
@@ -31,8 +35,18 @@ pub struct ObjectContextData {
     pub xdictionary_handle: Option<Handle>,
 
     /// `AcDbObjectContextData` class_version (DXF 70). Real R2018 files write 4;
-    /// LibreDWG's default is 3. Preserved on read.
+    /// ODA documents 3 as the default. Preserved on read.
     pub class_version: i16,
+    /// ODA §20.4.89 file-to-extension-dictionary flag. AutoCAD's own context
+    /// leaves do not carry the bit, and neither does this crate's DWG writer,
+    /// except for an MLeader leaf decoded from the ODA layout. Reads of every
+    /// other class keep the documented default, true. DXF has no group for it.
+    pub has_file_to_extension_dictionary: bool,
+    /// Native MLeader context records sometimes use a historical base that
+    /// omits the R2010+ file-to-extension-dictionary bit. Preserve that wire
+    /// layout separately from the flag's semantic value.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub uses_legacy_mleader_context_base: bool,
     /// `AcDbObjectContextData` is_default flag (DXF 290) — set on the native rep.
     pub is_default: bool,
     /// `AcDbAnnotScaleObjectContextData` scale handle (DXF 340) → an `AcDbScale`
@@ -44,7 +58,8 @@ pub struct ObjectContextData {
 }
 
 /// The type-specific placement payload of an annotative context leaf. Field
-/// layouts follow LibreDWG `dwg2.spec` (the binary-canonical order).
+/// layouts follow the ODA DWG specification where covered; other subtype
+/// layouts remain explicitly reverse-engineered.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ObjectContextKind {
@@ -85,8 +100,8 @@ pub enum ObjectContextKind {
     /// per-scale placement of annotative MTEXT.
     ///
     /// DWG order after the shared base: `BL attachment(70)`, then — note the
-    /// binary stream stores `x_axis_dir` **before** `ins_pt` (LibreDWG flags the
-    /// reversed order an "ODA bug"; DXF emits them the other way) — `3BD
+    /// binary stream stores `x_axis_dir` **before** `ins_pt` (DXF emits them in
+    /// the other order) — `3BD
     /// x_axis_dir`, `3BD ins_pt`, `BD rect_width(40)`, `BD rect_height(41)`,
     /// `BD extents_width(42)`, `BD extents_height(43)`, `BL column_type(71)`,
     /// and — only when `column_type != 0` — the column sub-fields.
@@ -94,10 +109,10 @@ pub enum ObjectContextKind {
 
     /// A dimension per-scale context (`ACDB_<AL|ANG|DM|RA|RADIMLG|ORD>DIMOBJECTCONTEXTDATA_CLASS`).
     ///
-    /// The shared base and aligned subtype are verified by native DWG→DWG→DWG
-    /// plus ODA conversion. The remaining subtype tails follow the same
-    /// Autodesk DXF field contract and LibreDWG binary layout; public fixtures
-    /// for those five tails are not currently available.
+    /// ODA §20.4.89 defines the shared base; §20.4.71 defines annotative scale
+    /// data. Aligned and dimension subtype tails are based on native captures
+    /// and the Autodesk DXF contract; not every subtype has a checked-in native
+    /// fixture yet.
     Dim(DimContext),
 
     /// `AcDbMLeaderObjectContextData`; a standalone annotation context using
@@ -165,9 +180,9 @@ pub struct HatchViewContext {
 pub struct MTextContext {
     /// Attachment point (DXF 70) — `BL` (bit-long), not `BS`.
     pub attachment: i32,
-    /// Text X-axis direction (DXF 10/20/30, as AutoCAD writes it; stored first in binary).
+    /// Text X-axis direction (DXF 10/20/30, as ACAD writes it; stored first in binary).
     pub x_axis_dir: Vector3,
-    /// Insertion point (DXF 11/21/31, as AutoCAD writes it; stored second in binary).
+    /// Insertion point (DXF 11/21/31, as ACAD writes it; stored second in binary).
     pub insertion: Vector3,
     /// Reference rectangle width (DXF 40).
     pub rect_width: f64,
@@ -208,6 +223,9 @@ pub struct EmbeddedMTextContext {
     /// R2013+ embedded binary-data flag.
     pub has_binary_data: bool,
     pub class_version: i16,
+    /// ODA's nested file-to-extension-dictionary flag. AutoCAD's embedded
+    /// MTEXT attribute context does not store it; reads keep the default true.
+    pub has_file_to_extension_dictionary: bool,
     pub is_default: bool,
     pub scale: Handle,
     pub mtext: MTextContext,

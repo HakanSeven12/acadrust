@@ -51,7 +51,7 @@ pub(super) fn flatten_leader(leader: &Leader) -> Vec<EntityType> {
         .collect()
 }
 
-/// Length-to-half-width ratio of AutoCAD's default `_ClosedFilled` arrowhead:
+/// Length-to-half-width ratio of ACAD's default `_ClosedFilled` arrowhead:
 /// a unit-long triangle whose base spans `[-1/6, 1/6]`.
 const CLOSED_FILLED_HALF_WIDTH: f64 = 1.0 / 6.0;
 
@@ -87,7 +87,7 @@ pub(super) fn line_arrowhead_size(ml: &MultiLeader, line: &LeaderLine) -> f64 {
 }
 
 /// A leader line's full path: its own vertices, arrow tip first, then the
-/// root's connection point, where the landing starts. AutoCAD stores that last
+/// root's connection point, where the landing starts. ACAD stores that last
 /// point on the root only, so a straight leader is a single-vertex line.
 pub(super) fn leader_line_path(root: &LeaderRoot, line: &LeaderLine) -> Vec<Vector3> {
     let mut path = line.points.clone();
@@ -248,7 +248,7 @@ pub(super) fn explode_leader_line(
 }
 
 pub(super) fn explode_multileader(ml: &MultiLeader) -> Vec<EntityType> {
-    // Decompose MultiLeader the way AutoCAD's EXPLODE does: per leader line,
+    // Decompose MultiLeader the way ACAD's EXPLODE does: per leader line,
     // the arrowhead and the segments down to the root's connection point;
     // per root, the landing; then the text.
     let mut result = Vec::new();

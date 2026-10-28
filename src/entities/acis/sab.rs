@@ -72,7 +72,7 @@ pub mod tags {
     /// Direction (3 doubles: x, y, z).
     pub const DIRECTION: u8 = 0x14;
     /// Enumerated value (4-byte int). Emitted by ASM / ShapeManager records
-    /// (AutoCAD 2013+).
+    /// (ACAD 2013+).
     pub const ENUM: u8 = 0x15;
     /// U-V vector (2 doubles).
     pub const UV: u8 = 0x16;
@@ -633,7 +633,9 @@ impl SabWriter {
                 && index + 1 < tokens.len()
                 && (matches!(
                     subtypes.last(),
-                    None | Some(Some("exactcur" | "exact_int_cur" | "exactsur" | "offsur" | "exppc"))
+                    None | Some(Some(
+                        "exactcur" | "exact_int_cur" | "exactsur" | "offsur" | "exppc"
+                    ))
                 ) || in_int_cur(&subtypes))
             {
                 doubles.push(index + 1);
@@ -997,7 +999,7 @@ impl SabReader {
     pub fn read_with_consumed(data: &[u8]) -> Result<(SatDocument, usize), SabError> {
         // Two header magics: classic ACIS ("ACIS BinaryFile", 15 bytes) and the
         // newer Autodesk ShapeManager ("ASM BinaryFile", 14 bytes) emitted by
-        // AutoCAD 2013+ and carried in the AcDs data store. In both the version
+        // ACAD 2013+ and carried in the AcDs data store. In both the version
         // u32 begins 15 bytes in: ACIS's magic is 15 bytes; ASM's 14-byte magic
         // is followed by one trailing byte before the header ints.
         const SAB_MAGIC_ASM: &[u8] = b"ASM BinaryFile";

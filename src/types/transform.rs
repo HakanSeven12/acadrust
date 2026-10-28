@@ -52,7 +52,7 @@ impl Matrix3 {
 
     /// Create arbitrary axis matrix for OCS to WCS conversion
     ///
-    /// Implements the AutoCAD arbitrary axis algorithm
+    /// Implements the ACAD arbitrary axis algorithm
     pub fn arbitrary_axis(normal: Vector3) -> Self {
         const ARBITRARY_AXIS_THRESHOLD: f64 = 1.0 / 64.0;
 

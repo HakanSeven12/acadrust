@@ -1,15 +1,32 @@
-//! RGB-to-AutoCAD color mapping and material-layer utilities.
+//! RGB-to-ACAD color mapping and material-layer utilities.
 
 use crate::document::CadDocument;
 use crate::tables::{Layer, TableEntry};
 use crate::types::Color;
 
-/// Map an RGB colour to the nearest AutoCAD Color Index (ACI 1–255).
+/// Map an RGB colour to the nearest ACAD Color Index (ACI 1–255).
 ///
 /// Uses Euclidean distance in RGB space.  If you need true-colour fidelity,
 /// use [`Color::Rgb`] directly instead.
 pub fn rgb_to_aci(r: u8, g: u8, b: u8) -> Color {
     Color::Index(crate::types::aci_table::nearest_aci(r, g, b))
+}
+
+/// Round a 0–1 channel to an 8-bit value. Non-finite and out-of-range inputs saturate.
+pub fn unit_channel_to_u8(value: f32) -> u8 {
+    if !value.is_finite() {
+        return 0;
+    }
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// True-colour value from 0–1 channels, rounded to the nearest byte.
+pub fn color_from_unit_rgb(r: f32, g: f32, b: f32) -> Color {
+    Color::Rgb {
+        r: unit_channel_to_u8(r),
+        g: unit_channel_to_u8(g),
+        b: unit_channel_to_u8(b),
+    }
 }
 
 /// Map an RGB colour to a [`Color`], preferring true colour (`Rgb`) when the
@@ -51,7 +68,7 @@ pub fn create_material_layer(
 
 /// Sanitize a string for use as a DXF layer name.
 ///
-/// Replaces characters that are invalid in AutoCAD layer names with `_`.
+/// Replaces characters that are invalid in ACAD layer names with `_`.
 fn sanitize_layer_name(name: &str) -> String {
     let mut out = String::with_capacity(name.len());
     for ch in name.chars() {
@@ -119,5 +136,13 @@ mod tests {
     fn test_rgb_to_color_aci_fallback() {
         let c = rgb_to_color(255, 0, 0, false);
         assert_eq!(c, Color::Index(1));
+    }
+
+    #[test]
+    fn test_unit_channel_rounds_half_up() {
+        assert_eq!(unit_channel_to_u8(0.5), 128);
+        assert_eq!(unit_channel_to_u8(1.0), 255);
+        assert_eq!(unit_channel_to_u8(2.0), 255);
+        assert_eq!(unit_channel_to_u8(f32::NAN), 0);
     }
 }

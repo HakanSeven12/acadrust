@@ -292,6 +292,8 @@ fn mtext_context_data_has_no_subclass_marker_and_autocad_point_codes() {
         reactors: Vec::new(),
         xdictionary_handle: None,
         class_version: 4,
+        has_file_to_extension_dictionary: true,
+        uses_legacy_mleader_context_base: false,
         is_default: true,
         scale: Handle::NULL,
         kind: ObjectContextKind::MText(MTextContext {

@@ -35,30 +35,30 @@ pub use vector::{Vector2, Vector3};
 pub enum DxfVersion {
     /// Unknown version
     Unknown,
-    /// AutoCAD Release 11/12 (AC1009).
+    /// ACAD Release 11/12 (AC1009).
     ///
     /// DWG uses the shared pre-R13 R11/R12 file layout for this version.
     AC1009,
-    /// AutoCAD R13 (AC1012)
+    /// ACAD R13 (AC1012)
     AC1012,
-    /// AutoCAD R14 (AC1014)
+    /// ACAD R14 (AC1014)
     AC1014,
-    /// AutoCAD 2000 (AC1015)
+    /// ACAD 2000 (AC1015)
     AC1015,
-    /// AutoCAD 2004 (AC1018)
+    /// ACAD 2004 (AC1018)
     AC1018,
-    /// AutoCAD 2007 (AC1021)
+    /// ACAD 2007 (AC1021)
     AC1021,
-    /// AutoCAD 2010 (AC1024)
+    /// ACAD 2010 (AC1024)
     AC1024,
-    /// AutoCAD 2013 (AC1027)
+    /// ACAD 2013 (AC1027)
     AC1027,
-    /// AutoCAD 2018 (AC1032)
+    /// ACAD 2018 (AC1032)
     AC1032,
 }
 
 impl DxfVersion {
-    /// Whether this version is the shared AutoCAD Release 11/12 (AC1009)
+    /// Whether this version is the shared ACAD Release 11/12 (AC1009)
     /// format family.
     pub fn is_r11_r12(&self) -> bool {
         *self == DxfVersion::AC1009

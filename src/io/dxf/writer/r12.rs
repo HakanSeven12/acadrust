@@ -50,7 +50,7 @@ pub(super) fn write_r12<W: DxfStreamWriter>(writer: &mut W, document: &CadDocume
 
 // ----------------------------------------------------------------------------- names
 
-/// Maps names to valid, unique R12 symbol names (case-insensitive like AutoCAD).
+/// Maps names to valid, unique R12 symbol names (case-insensitive like ACAD).
 #[derive(Default)]
 struct NameMap {
     map: HashMap<String, String>,
@@ -658,7 +658,7 @@ impl<'a, W: DxfStreamWriter> R12Writer<'a, W> {
 
     fn write_blocks(&mut self) -> Result<()> {
         self.writer.write_section_start("BLOCKS")?;
-        // AutoCAD R12 writes the two layout blocks, empty
+        // ACAD R12 writes the two layout blocks, empty
         for name in ["$MODEL_SPACE", "$PAPER_SPACE"] {
             self.block_start(name, 0, Vector3::ZERO)?;
             self.block_end()?;
@@ -703,7 +703,7 @@ impl<'a, W: DxfStreamWriter> R12Writer<'a, W> {
         Ok(())
     }
 
-    /// R12 has no HATCH entity: like AutoCAD R12, every hatch becomes an
+    /// R12 has no HATCH entity: like ACAD R12, every hatch becomes an
     /// anonymous `*X` block with its pattern lines (or SOLID strips for fills),
     /// inserted where the hatch was.
     fn write_hatch_blocks(&mut self) -> Result<()> {
@@ -1493,7 +1493,7 @@ fn ellipse_points(el: &Ellipse) -> Vec<Vector3> {
         .collect()
 }
 
-/// AutoCAD arbitrary axis algorithm: OCS point -> WCS.
+/// ACAD arbitrary axis algorithm: OCS point -> WCS.
 fn ocs_to_wcs(normal: Vector3, p: Vector3) -> Vector3 {
     let n = normal.normalize();
     if (n - Vector3::new(0.0, 0.0, 1.0)).length() < 1e-12 {

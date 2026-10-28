@@ -31,13 +31,26 @@ fn hatch_angles_keep_their_bits_through_dxf() {
             counter_clockwise: true,
         }));
         hatch.paths.push(path);
-        let id = document.add_entity(EntityType::Hatch(Box::new(hatch))).unwrap();
+        let id = document
+            .add_entity(EntityType::Hatch(Box::new(hatch)))
+            .unwrap();
         let bytes = DxfWriter::new(&document).write_to_vec().unwrap();
-        let read = DxfReader::from_reader(Cursor::new(bytes)).unwrap().read().unwrap();
+        let read = DxfReader::from_reader(Cursor::new(bytes))
+            .unwrap()
+            .read()
+            .unwrap();
         let EntityType::Hatch(hatch) = read.get_entity(id).unwrap() else {
             panic!("a hatch");
         };
-        assert_eq!(hatch.pattern_angle.to_bits(), wanted[0].to_bits(), "{version:?} 52");
-        assert_eq!(hatch.pattern.lines[0].angle.to_bits(), wanted[1].to_bits(), "{version:?} 53");
+        assert_eq!(
+            hatch.pattern_angle.to_bits(),
+            wanted[0].to_bits(),
+            "{version:?} 52"
+        );
+        assert_eq!(
+            hatch.pattern.lines[0].angle.to_bits(),
+            wanted[1].to_bits(),
+            "{version:?} 53"
+        );
     }
 }

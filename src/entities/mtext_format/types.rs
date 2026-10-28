@@ -14,7 +14,7 @@ use std::fmt::Write;
 // Special Characters
 // ============================================================================
 
-/// AutoCAD special character codes (`%%...`).
+/// ACAD special character codes (`%%...`).
 ///
 /// These are escape sequences in MTEXT/TEXT strings that represent special symbols.
 /// Only `%%c` (diameter Ø), `%%d` (degree °), and `%%p` (plus-minus ±) are
@@ -171,7 +171,7 @@ impl MTextParagraphAlignment {
             'c' => MTextParagraphAlignment::Center,
             'j' => MTextParagraphAlignment::Justified,
             'd' => MTextParagraphAlignment::Distributed,
-            // AutoCAD serializes the paragraph *Justify* option as `\pq*` (the
+            // ACAD serializes the paragraph *Justify* option as `\pq*` (the
             // `*` that means "reset" in the other sub-codes), so a `q*` reads as
             // justified rather than an alignment reset.
             '*' => MTextParagraphAlignment::Justified,
@@ -356,13 +356,13 @@ impl core::fmt::Display for TabStop {
 // Color
 // ============================================================================
 
-/// Represents an AutoCAD Color Index (ACI) color, true-color RGB, or ByLayer/ByBlock.
+/// Represents an ACAD Color Index (ACI) color, true-color RGB, or ByLayer/ByBlock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MTextColor {
     /// No color specified (inherits from entity or parent)
     None,
-    /// AutoCAD Color Index (1–255)
+    /// ACAD Color Index (1–255)
     Index(u16),
     /// True color value as packed 24-bit integer (r << 16 | g << 8 | b)
     TrueColor(u32),
@@ -453,7 +453,7 @@ impl std::fmt::Display for MTextColor {
 ///
 /// Flags the format model does not know about are kept verbatim in
 /// [`extra`](Self::extra) so parse→serialize round-trips stay faithful even
-/// for flags added by newer AutoCAD versions.
+/// for flags added by newer ACAD versions.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MTextFont {
@@ -756,6 +756,17 @@ pub struct MTextParagraph {
     /// [`to_mtext_string`](MTextDocument::to_mtext_string) writes every break
     /// back as `\P`, quietly collapsing a multi-column MTEXT on round-trip.
     pub starts_column: bool,
+
+    /// Span properties in effect where this paragraph ends: at its break
+    /// (`\P`, `\N`, `^J`, a raw line feed, `\p;`) or at the end of the text.
+    ///
+    /// An empty paragraph (`A\P\PB`) has no spans, so this is the only record
+    /// of the height, font and colour its line is set in. Groups closed before
+    /// the break do not apply to it: in `{\H2x;A}\P\PB` the empty line has the
+    /// outer height, in `\H2x;\PA` the doubled one. Plain-text parsing (TEXT)
+    /// records only the `%%u`/`%%o` state, which ends at the string end.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub end_properties: SpanProperties,
 }
 
 impl MTextParagraph {
@@ -765,6 +776,7 @@ impl MTextParagraph {
             properties: ParagraphProperties::default(),
             spans: Vec::new(),
             starts_column: false,
+            end_properties: SpanProperties::default(),
         }
     }
 
@@ -774,6 +786,7 @@ impl MTextParagraph {
             properties: ParagraphProperties::default(),
             spans: vec![MTextSpan::plain(text)],
             starts_column: false,
+            end_properties: SpanProperties::default(),
         }
     }
 

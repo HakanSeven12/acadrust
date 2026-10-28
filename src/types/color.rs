@@ -3,10 +3,10 @@
 use super::aci_table;
 use std::fmt;
 
-/// Represents a color in AutoCAD
+/// Represents a color in ACAD
 ///
 /// Colors can be represented in multiple ways:
-/// - By index (0-256): AutoCAD Color Index (ACI)
+/// - By index (0-256): ACAD Color Index (ACI)
 /// - By RGB values: True color
 /// - By layer: Use the layer's color
 /// - By block: Use the block's color
@@ -20,14 +20,14 @@ pub enum Color {
     None,
     /// Color by block (index 0)
     ByBlock,
-    /// AutoCAD Color Index (1-255)
+    /// ACAD Color Index (1-255)
     Index(u8),
     /// True color with RGB values
     Rgb { r: u8, g: u8, b: u8 },
 }
 
 impl Color {
-    /// Create a color from an AutoCAD Color Index
+    /// Create a color from an ACAD Color Index
     pub fn from_index(index: i16) -> Self {
         match index {
             0 => Color::ByBlock,

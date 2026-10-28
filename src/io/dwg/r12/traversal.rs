@@ -67,7 +67,7 @@ impl Walker {
     fn jump_target(&self, raw: u32, owner: Owner) -> Result<Option<Cursor>> {
         let mut offset = raw & 0x00ff_ffff;
         let section = match raw >> 24 {
-            // AutoCAD's change-stream return markers address the original
+            // ACAD's change-stream return markers address the original
             // file directly. Also accept section-relative legacy markers.
             0 if self.sections[0].base_address <= raw
                 && raw

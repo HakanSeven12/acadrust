@@ -1,6 +1,6 @@
 //! DWG binary file format support.
 //!
-//! Read and write AutoCAD's native binary format.  DWG files use
+//! Read and write ACAD's native binary format.  DWG files use
 //! bit-granularity encoding, version-specific data layouts, and LZ77
 //! compression (R2004+).
 //!
@@ -22,7 +22,7 @@
 //!
 //! ## Supported versions
 //!
-//! | DWG Version | AutoCAD | File format  |
+//! | DWG Version | ACAD | File format  |
 //! |-------------|---------|-------------|
 //! | AC1009      | R11/R12 | Pre-R13     |
 //! | AC1012      | R13     | Linear      |
@@ -39,7 +39,11 @@ pub(crate) fn unwind_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<String>()
         .cloned()
-        .or_else(|| payload.downcast_ref::<&str>().map(|message| (*message).to_string()))
+        .or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_string())
+        })
         .unwrap_or_else(|| "Record decoder failed".to_string())
 }
 
@@ -78,8 +82,8 @@ mod parallel;
 pub mod preview;
 pub mod r12;
 pub mod reed_solomon;
-pub(crate) mod typeface_eed;
 pub(crate) mod size_limits;
+pub(crate) mod typeface_eed;
 
 pub use dwg_reader::DwgReadOptions;
 pub use dwg_reader::DwgReader;

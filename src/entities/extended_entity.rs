@@ -5,10 +5,7 @@
 //! enum compact.
 
 use crate::entities::{Entity, EntityCommon, MText};
-use crate::types::{
-    BoundingBox3D, Color, Handle, LineWeight, Matrix3, Matrix4, Transform, Transparency, Vector2,
-    Vector3,
-};
+use crate::types::{BoundingBox3D, Color, Handle, Matrix3, Matrix4, Transform, Vector2, Vector3};
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -20,7 +17,9 @@ pub struct ExtendedEntity {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ExtendedEntityData {
-    Camera { view_handle: Handle },
+    Camera {
+        view_handle: Handle,
+    },
     SectionObject(SectionObjectData),
     ArcAlignedText(ArcAlignedTextData),
     RemoteText(RemoteTextData),
@@ -35,6 +34,10 @@ pub enum ExtendedEntityData {
     Legacy(LegacyEntityData),
     DynamicBlock(crate::objects::DynamicBlockData),
     RegisteredClass(RegisteredClassEntityData),
+    /// ACAD Arch entity (wall, door, stair, space, and the other
+    /// AEC entities). The class record stays intact; profiles can be moved
+    /// and reshaped.
+    Arch(crate::classes::arch::ArchEntityData),
 }
 
 impl ExtendedEntityData {
@@ -48,6 +51,11 @@ impl ExtendedEntityData {
                 value.raw_dwg_data = source.raw_dwg_data.clone();
                 value.raw_dwg_version = source.raw_dwg_version;
                 value.raw_dxf_codes = source.raw_dxf_codes.clone();
+            }
+            (Self::Arch(value), Self::Arch(source)) => {
+                value.raw_dwg_data = source.raw_dwg_data.clone();
+                value.raw_dxf_codes = source.raw_dxf_codes.clone();
+                value.dwg_source_version = source.dwg_source_version;
             }
             _ => {}
         }
@@ -327,57 +335,18 @@ impl ExtendedEntity {
                 data.entity_dxf_name().unwrap_or("DYNAMICBLOCKENTITY")
             }
             ExtendedEntityData::RegisteredClass(data) => &data.dxf_name,
+            ExtendedEntityData::Arch(data) => data.dxf_name.as_str(),
         }
     }
 }
 
 impl Entity for ExtendedEntity {
-    fn handle(&self) -> Handle {
-        self.common.handle
+    fn common(&self) -> &super::EntityCommon {
+        &self.common
     }
 
-    fn set_handle(&mut self, handle: Handle) {
-        self.common.handle = handle;
-    }
-
-    fn layer(&self) -> &str {
-        &self.common.layer
-    }
-
-    fn set_layer(&mut self, layer: String) {
-        self.common.layer = layer;
-    }
-
-    fn color(&self) -> Color {
-        self.common.color
-    }
-
-    fn set_color(&mut self, color: Color) {
-        self.common.color = color;
-    }
-
-    fn line_weight(&self) -> LineWeight {
-        self.common.line_weight
-    }
-
-    fn set_line_weight(&mut self, weight: LineWeight) {
-        self.common.line_weight = weight;
-    }
-
-    fn transparency(&self) -> Transparency {
-        self.common.transparency
-    }
-
-    fn set_transparency(&mut self, transparency: Transparency) {
-        self.common.transparency = transparency;
-    }
-
-    fn is_invisible(&self) -> bool {
-        self.common.invisible
-    }
-
-    fn set_invisible(&mut self, invisible: bool) {
-        self.common.invisible = invisible;
+    fn common_mut(&mut self) -> &mut super::EntityCommon {
+        &mut self.common
     }
 
     fn bounding_box(&self) -> BoundingBox3D {
@@ -395,6 +364,7 @@ impl Entity for ExtendedEntity {
                 vec![data.extents_min, data.extents_max]
             }
             ExtendedEntityData::PointCloudEx(data) => point_cloud_ex_corners(data).to_vec(),
+            ExtendedEntityData::Arch(data) => data.profiles.iter().flatten().copied().collect(),
             _ => Vec::new(),
         };
         BoundingBox3D::from_points(&points).unwrap_or_default()
@@ -423,6 +393,9 @@ impl Entity for ExtendedEntity {
                 // The extents stay in the scan's own coordinates; the
                 // placement moves.
                 data.ucs_origin = data.ucs_origin + offset;
+            }
+            ExtendedEntityData::Arch(data) => {
+                let _ = data.translate(&mut self.common.graphic_data, offset);
             }
             _ => {}
         }
@@ -515,6 +488,12 @@ impl Entity for ExtendedEntity {
                 data.ucs_x_direction = transform.apply_rotation(data.ucs_x_direction);
                 data.ucs_y_direction = transform.apply_rotation(data.ucs_y_direction);
                 data.ucs_z_direction = transform.apply_rotation(data.ucs_z_direction);
+            }
+            ExtendedEntityData::Arch(data) => {
+                let _ = data.transform_points(&mut self.common.graphic_data, |point| {
+                    transform.apply(point)
+                });
+                return;
             }
             // Cameras refer to VIEW table records. Remaining classes contain
             // opaque payloads or drawing metadata, with no editable geometry.

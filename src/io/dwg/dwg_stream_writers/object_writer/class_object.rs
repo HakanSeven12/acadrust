@@ -339,7 +339,7 @@ impl<'a> DwgObjectWriter<'a> {
                     self.writer
                         .write_main_handle(DwgReferenceType::HardPointer, handle.value());
                 }
-                // The undocumented trailing block is only AutoCAD's derived
+                // The undocumented trailing block is only ACAD's derived
                 // acceleration cache. A zero-length cache is canonical and
                 // lets the host rebuild it from the semantic object list.
                 self.writer.write_bit_long(0);

@@ -1,7 +1,7 @@
-//! Minimal JSON value parser for glTF import.
+//! JSON values for glTF import.
 //!
-//! Supports the subset of JSON needed for glTF: objects, arrays, strings,
-//! numbers, booleans, and null.  Not a general-purpose parser.
+//! Parsing is `serde_json`. [`JsonValue`] keeps the small lookup API the
+//! importer uses.
 
 use crate::error::{DxfError, Result};
 
@@ -19,9 +19,9 @@ pub enum JsonValue {
 impl JsonValue {
     /// Parse a JSON string into a [`JsonValue`].
     pub fn parse(input: &str) -> Result<JsonValue> {
-        let bytes = input.as_bytes();
-        let (val, _) = parse_value(bytes, skip_ws(bytes, 0), 0)?;
-        Ok(val)
+        let value = serde_json::from_str(input)
+            .map_err(|error| DxfError::ImportError(format!("JSON parse error: {error}")))?;
+        Ok(from_serde(value))
     }
 
     /// Get a value by object key.
@@ -96,198 +96,21 @@ impl JsonValue {
     }
 }
 
-const MAX_DEPTH: usize = 128;
-
-fn err(msg: &str, pos: usize) -> DxfError {
-    DxfError::ImportError(format!("JSON parse error at byte {}: {}", pos, msg))
-}
-
-fn skip_ws(b: &[u8], mut i: usize) -> usize {
-    while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
-        i += 1;
-    }
-    i
-}
-
-fn parse_value(b: &[u8], i: usize, depth: usize) -> Result<(JsonValue, usize)> {
-    if i >= b.len() {
-        return Err(err("unexpected end of input", i));
-    }
-    if depth > MAX_DEPTH {
-        return Err(err("JSON depth limit exceeded", i));
-    }
-    match b[i] {
-        b'"' => parse_string(b, i),
-        b'{' => parse_object(b, i, depth + 1),
-        b'[' => parse_array(b, i, depth + 1),
-        b't' | b'f' => parse_bool(b, i),
-        b'n' => parse_null(b, i),
-        _ => parse_number(b, i),
-    }
-}
-
-fn parse_string(b: &[u8], i: usize) -> Result<(JsonValue, usize)> {
-    let (s, end) = parse_string_raw(b, i)?;
-    Ok((JsonValue::Str(s), end))
-}
-
-fn parse_string_raw(b: &[u8], i: usize) -> Result<(String, usize)> {
-    if b[i] != b'"' {
-        return Err(err("expected '\"'", i));
-    }
-    let mut j = i + 1;
-    let mut s = String::new();
-    while j < b.len() {
-        match b[j] {
-            b'"' => return Ok((s, j + 1)),
-            b'\\' => {
-                j += 1;
-                if j >= b.len() {
-                    return Err(err("unexpected end in string escape", j));
-                }
-                match b[j] {
-                    b'"' => s.push('"'),
-                    b'\\' => s.push('\\'),
-                    b'/' => s.push('/'),
-                    b'n' => s.push('\n'),
-                    b'r' => s.push('\r'),
-                    b't' => s.push('\t'),
-                    b'b' => s.push('\u{08}'),
-                    b'f' => s.push('\u{0C}'),
-                    b'u' => {
-                        // \uXXXX
-                        if j + 4 >= b.len() {
-                            return Err(err("incomplete unicode escape", j));
-                        }
-                        let hex = std::str::from_utf8(&b[j + 1..j + 5])
-                            .map_err(|_| err("invalid unicode hex", j))?;
-                        let cp = u32::from_str_radix(hex, 16)
-                            .map_err(|_| err("invalid unicode hex", j))?;
-                        if let Some(c) = char::from_u32(cp) {
-                            s.push(c);
-                        }
-                        j += 4;
-                    }
-                    _ => {
-                        s.push('\\');
-                        s.push(b[j] as char);
-                    }
-                }
-            }
-            _ => {
-                // Fast path: scan for end of simple substring
-                let start = j;
-                while j < b.len() && b[j] != b'"' && b[j] != b'\\' {
-                    j += 1;
-                }
-                s.push_str(
-                    std::str::from_utf8(&b[start..j])
-                        .map_err(|_| err("invalid UTF-8 in string", start))?,
-                );
-                continue;
-            }
+fn from_serde(value: serde_json::Value) -> JsonValue {
+    match value {
+        serde_json::Value::Null => JsonValue::Null,
+        serde_json::Value::Bool(value) => JsonValue::Bool(value),
+        serde_json::Value::Number(value) => JsonValue::Number(value.as_f64().unwrap_or(f64::NAN)),
+        serde_json::Value::String(value) => JsonValue::Str(value),
+        serde_json::Value::Array(values) => {
+            JsonValue::Array(values.into_iter().map(from_serde).collect())
         }
-        j += 1;
-    }
-    Err(err("unterminated string", i))
-}
-
-fn parse_number(b: &[u8], i: usize) -> Result<(JsonValue, usize)> {
-    let start = i;
-    let mut j = i;
-    if j < b.len() && b[j] == b'-' {
-        j += 1;
-    }
-    while j < b.len() && b[j].is_ascii_digit() {
-        j += 1;
-    }
-    if j < b.len() && b[j] == b'.' {
-        j += 1;
-        while j < b.len() && b[j].is_ascii_digit() {
-            j += 1;
-        }
-    }
-    if j < b.len() && (b[j] == b'e' || b[j] == b'E') {
-        j += 1;
-        if j < b.len() && (b[j] == b'+' || b[j] == b'-') {
-            j += 1;
-        }
-        while j < b.len() && b[j].is_ascii_digit() {
-            j += 1;
-        }
-    }
-    let s = std::str::from_utf8(&b[start..j]).map_err(|_| err("invalid number", start))?;
-    let n: f64 = s.parse().map_err(|_| err("invalid number", start))?;
-    Ok((JsonValue::Number(n), j))
-}
-
-fn parse_bool(b: &[u8], i: usize) -> Result<(JsonValue, usize)> {
-    if b[i..].starts_with(b"true") {
-        Ok((JsonValue::Bool(true), i + 4))
-    } else if b[i..].starts_with(b"false") {
-        Ok((JsonValue::Bool(false), i + 5))
-    } else {
-        Err(err("expected boolean", i))
-    }
-}
-
-fn parse_null(b: &[u8], i: usize) -> Result<(JsonValue, usize)> {
-    if b[i..].starts_with(b"null") {
-        Ok((JsonValue::Null, i + 4))
-    } else {
-        Err(err("expected null", i))
-    }
-}
-
-fn parse_array(b: &[u8], i: usize, depth: usize) -> Result<(JsonValue, usize)> {
-    let mut j = skip_ws(b, i + 1);
-    let mut arr = Vec::new();
-    if j < b.len() && b[j] == b']' {
-        return Ok((JsonValue::Array(arr), j + 1));
-    }
-    loop {
-        let (val, next) = parse_value(b, j, depth)?;
-        arr.push(val);
-        j = skip_ws(b, next);
-        if j >= b.len() {
-            return Err(err("unterminated array", i));
-        }
-        if b[j] == b']' {
-            return Ok((JsonValue::Array(arr), j + 1));
-        }
-        if b[j] != b',' {
-            return Err(err("expected ',' or ']' in array", j));
-        }
-        j = skip_ws(b, j + 1);
-    }
-}
-
-fn parse_object(b: &[u8], i: usize, depth: usize) -> Result<(JsonValue, usize)> {
-    let mut j = skip_ws(b, i + 1);
-    let mut pairs = Vec::new();
-    if j < b.len() && b[j] == b'}' {
-        return Ok((JsonValue::Object(pairs), j + 1));
-    }
-    loop {
-        let (key, after_key) = parse_string_raw(b, j)?;
-        j = skip_ws(b, after_key);
-        if j >= b.len() || b[j] != b':' {
-            return Err(err("expected ':' in object", j));
-        }
-        j = skip_ws(b, j + 1);
-        let (val, after_val) = parse_value(b, j, depth)?;
-        pairs.push((key, val));
-        j = skip_ws(b, after_val);
-        if j >= b.len() {
-            return Err(err("unterminated object", i));
-        }
-        if b[j] == b'}' {
-            return Ok((JsonValue::Object(pairs), j + 1));
-        }
-        if b[j] != b',' {
-            return Err(err("expected ',' or '}' in object", j));
-        }
-        j = skip_ws(b, j + 1);
+        serde_json::Value::Object(values) => JsonValue::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| (key, from_serde(value)))
+                .collect(),
+        ),
     }
 }
 
@@ -342,7 +165,7 @@ mod tests {
         assert!(res.is_err());
         let err = res.unwrap_err().to_string();
         assert!(
-            err.contains("depth limit exceeded"),
+            err.contains("recursion limit exceeded"),
             "Unexpected error: {}",
             err
         );

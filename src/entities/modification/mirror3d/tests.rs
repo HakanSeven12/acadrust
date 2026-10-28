@@ -50,7 +50,7 @@ fn three_point_planes_handle_subnormal_and_overflowing_directions() {
     }
 }
 
-// Captured using AutoCAD 2027 native MIRROR3D, separately from planar MIRROR.
+// Captured using ACAD 2027 native MIRROR3D, separately from planar MIRROR.
 const NATIVE_MIRROR3D_CASES: &[NativeMirrorCase] = &[
     NativeMirrorCase { name: "MIRROR3D_TEXT_M0", source: "0\nTEXT\n100\nAcDbEntity\n67\n0\n8\n0\n100\nAcDbText\n10\n3\n20\n5\n30\n0\n40\n2.5\n1\nMirror Test\n50\n22.91831180523293\n41\n0.8\n51\n11.459155902616464\n7\nStandard\n71\n0\n72\n0\n11\n0\n21\n0\n31\n0\n210\n0\n220\n0\n230\n1\n100\nAcDbText\n73\n0\n", expected: "0\nTEXT\n100\nAcDbEntity\n67\n0\n8\n0\n100\nAcDbText\n10\n-21.4212\n20\n12.7884\n30\n0\n40\n2.5\n1\nMirror Test\n50\n337.0819570735708\n41\n0.8\n51\n11.459155902616464\n7\nStandard\n71\n0\n72\n0\n11\n0\n21\n0\n31\n0\n210\n0\n220\n4.44089e-16\n230\n-1\n100\nAcDbText\n73\n0\n" },
     NativeMirrorCase { name: "MIRROR3D_MTEXT_M0", source: "0\nMTEXT\n100\nAcDbEntity\n67\n0\n8\n0\n100\nAcDbMText\n10\n3\n20\n5\n30\n0\n40\n2.5\n41\n30\n46\n0\n71\n1\n72\n5\n1\nFirst\\PSecond\n7\nStandard\n210\n0\n220\n0\n230\n1\n11\n0.921061\n21\n0.389418\n31\n0\n42\n14.1667\n43\n6.66667\n50\n22.91831180523293\n73\n1\n44\n1\n", expected: "0\nMTEXT\n100\nAcDbEntity\n67\n0\n8\n0\n100\nAcDbMText\n10\n3\n20\n5\n30\n2.22045e-15\n40\n2.5\n41\n30\n46\n0\n71\n3\n72\n5\n1\nFirst\\PSecond\n7\nStandard\n210\n0\n220\n4.44089e-16\n230\n-1\n11\n-0.921061\n21\n-0.389418\n31\n-1.72936e-16\n42\n14.1667\n43\n6.66667\n50\n337.0819570735708\n73\n1\n44\n1\n" },

@@ -1,10 +1,8 @@
-//! TABLESTYLE and MLEADERSTYLE must survive legacy DWG writes.
+//! Style dictionaries follow the version that introduced their objects.
 //!
-//! Drawings from R2000 through R2013 keep both style dictionaries and both
-//! Standard style objects in the named-objects dictionary, with the same
-//! handles, so a write to any of those versions has to keep them too. Other
-//! records point at those handles, and dropping the styles left the
-//! references dangling.
+//! TABLESTYLE is kept from R2004 (AC1018). MLEADERSTYLE is kept from R2007
+//! (AC1021), and also on R2004 when the MLEADERSTYLE class is already
+//! declared. Earlier saves drop the dictionary and the style it holds.
 
 use acadrust::objects::ObjectType;
 use acadrust::types::DxfVersion;
@@ -58,14 +56,25 @@ fn write_at(doc: &CadDocument, version: DxfVersion) -> CadDocument {
     back
 }
 
+fn keeps(version: DxfVersion, name: &str, mleader_class: bool) -> bool {
+    match name {
+        "ACAD_TABLESTYLE" => version >= DxfVersion::AC1018,
+        "ACAD_MLEADERSTYLE" => {
+            version >= DxfVersion::AC1021 || (version >= DxfVersion::AC1018 && mleader_class)
+        }
+        _ => false,
+    }
+}
+
 #[test]
-fn legacy_writes_keep_table_and_multileader_styles() {
+fn legacy_writes_keep_styles_only_from_their_introduction_version() {
     let input = read(FIXTURE);
     let (want_tables, want_leaders, want_entries) = styles(&input);
     assert!(
         want_tables > 0 && want_leaders > 0 && want_entries.len() == STYLES.len(),
         "fixture must carry both styles: tables={want_tables} leaders={want_leaders} entries={want_entries:?}"
     );
+    let mleader_class = input.classes.get_by_name("MLEADERSTYLE").is_some();
 
     for version in [
         DxfVersion::AC1015,
@@ -77,26 +86,32 @@ fn legacy_writes_keep_table_and_multileader_styles() {
     ] {
         let back = write_at(&input, version);
         let (tables, leaders, entries) = styles(&back);
+        let keep_table = keeps(version, "ACAD_TABLESTYLE", mleader_class);
+        let keep_leader = keeps(version, "ACAD_MLEADERSTYLE", mleader_class);
 
         assert_eq!(
-            tables, want_tables,
-            "{version:?}: TABLESTYLE objects dropped"
+            tables,
+            if keep_table { want_tables } else { 0 },
+            "{version:?}: TABLESTYLE"
         );
         assert_eq!(
-            leaders, want_leaders,
-            "{version:?}: MLEADERSTYLE objects dropped"
+            leaders,
+            if keep_leader { want_leaders } else { 0 },
+            "{version:?}: MLEADERSTYLE"
         );
-        assert_eq!(
-            entries, want_entries,
-            "{version:?}: named-objects style entries changed"
-        );
-
-        for (name, value) in &want_entries {
-            let resolved = back.objects.keys().any(|h| h.value() == *value);
-            assert!(
-                resolved,
-                "{version:?}: {name} entry points at {value:X}, which is not an object"
+        for name in STYLES {
+            let kept = keeps(version, name, mleader_class);
+            assert_eq!(
+                entries.get(name).copied(),
+                kept.then(|| want_entries[name]),
+                "{version:?}: {name}"
             );
+            if let Some(value) = entries.get(name) {
+                assert!(
+                    back.objects.keys().any(|handle| handle.value() == *value),
+                    "{version:?}: {name} entry points at {value:X}, which is not an object"
+                );
+            }
         }
     }
 }

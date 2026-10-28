@@ -1,6 +1,6 @@
-//! AutoCAD Color Index (ACI) to RGB lookup table.
+//! ACAD Color Index (ACI) to RGB lookup table.
 //!
-//! The canonical 256-entry mapping used by AutoCAD.  Indices 0 (ByBlock) and
+//! The canonical 256-entry mapping used by ACAD.  Indices 0 (ByBlock) and
 //! 256 (ByLayer) are _not_ real colors; index 7 is white on dark backgrounds
 //! and black on light backgrounds, mapped here as (255,255,255).
 //!
@@ -11,7 +11,7 @@
 /// RGB tuple for a single ACI entry.
 type Rgb = (u8, u8, u8);
 
-/// The standard 256-entry AutoCAD Color Index table (indices 0–255).
+/// The standard 256-entry ACAD Color Index table (indices 0–255).
 ///
 /// Index 0 maps to (0,0,0) as a placeholder — real usage treats it as ByBlock.
 pub static ACI_COLORS: [Rgb; 256] = [

@@ -1,16 +1,16 @@
 //! EXPLODE implementation for patterned HATCH entities.
 //!
-//! AutoCAD explodes a patterned hatch to the visible portions of its pattern,
+//! ACAD explodes a patterned hatch to the visible portions of its pattern,
 //! rather than to the boundary edges.  The implementation below generates the
 //! infinite pattern families, intersects them with the analytic hatch edges,
 //! applies the hatch fill rule, and emits the clipped dashes as LINE/POINT
-//! entities.  Solid and gradient hatches are intentionally atomic (AutoCAD
+//! entities.  Solid and gradient hatches are intentionally atomic (ACAD
 //! leaves those entities in the drawing when EXPLODE is invoked).
 
 use std::f64::consts::TAU;
 
 use crate::entities::hatch::{
-    BoundaryEdge, BoundaryPath, CircularArcEdge, EllipticArcEdge, Hatch, HatchStyleType, LineEdge,
+    BoundaryEdge, BoundaryPath, EllipticArcEdge, Hatch, HatchStyleType, LineEdge,
     PolylineEdge, SplineEdge,
 };
 use crate::entities::{EntityCommon, EntityType, Line, Point};
@@ -95,7 +95,7 @@ struct LoopGeometry {
 ///
 /// This is `pub(super)` so the dispatch in `explode.rs` can remain the public
 /// API.  A solid or gradient HATCH returns an empty vector, matching native
-/// AutoCAD EXPLODE (the source object survives).
+/// ACAD EXPLODE (the source object survives).
 pub(super) fn explode_hatch(hatch: &Hatch) -> Vec<EntityType> {
     if hatch.is_solid || hatch.gradient_color.enabled || hatch.pattern.lines.is_empty() {
         return Vec::new();
@@ -240,7 +240,7 @@ fn line_indices(origin: Vector2, offset: Vector2, dir: Vector2, bounds: &Bounds)
     // Keep the unused argument explicit: it documents that direction controls
     // the line while offset controls family spacing.
     let _ = dir;
-    // AutoCAD walks the visible scan lines from the positive offset side
+    // ACAD walks the visible scan lines from the positive offset side
     // toward the negative side (the order is observable in the generated
     // entity handles), so preserve that deterministic ordering.
     (first..=last).rev().collect()
@@ -343,11 +343,16 @@ fn edge_samples(edge: &BoundaryEdge) -> Vec<Vector2> {
     match edge {
         BoundaryEdge::Line(e) => vec![e.start, e.end],
         BoundaryEdge::CircularArc(e) => {
-            let sweep = oriented_sweep(e.start_angle, e.end_angle, e.counter_clockwise);
+            let (start, end) = if e.counter_clockwise {
+                (e.start_angle, e.end_angle)
+            } else {
+                (-e.start_angle, -e.end_angle)
+            };
+            let sweep = oriented_sweep(start, end, e.counter_clockwise);
             let n = ((sweep.abs() * 16.0).ceil() as usize).clamp(4, 96);
             (0..=n)
                 .map(|i| {
-                    let a = e.start_angle
+                    let a = start
                         + if e.counter_clockwise { 1.0 } else { -1.0 } * sweep.abs() * i as f64
                             / n as f64;
                     e.center + Vector2::new(e.radius * a.cos(), e.radius * a.sin())
@@ -355,7 +360,12 @@ fn edge_samples(edge: &BoundaryEdge) -> Vec<Vector2> {
                 .collect()
         }
         BoundaryEdge::EllipticArc(e) => {
-            let sweep = oriented_sweep(e.start_angle, e.end_angle, e.counter_clockwise);
+            let (start, end) = if e.counter_clockwise {
+                (e.start_angle, e.end_angle)
+            } else {
+                (-e.start_angle, -e.end_angle)
+            };
+            let sweep = oriented_sweep(start, end, e.counter_clockwise);
             let n = ((sweep.abs() * 16.0).ceil() as usize).clamp(8, 128);
             let major = e.major_axis_endpoint;
             let a = major.length();
@@ -363,7 +373,7 @@ fn edge_samples(edge: &BoundaryEdge) -> Vec<Vector2> {
             let uy = Vector2::new(-ux.y, ux.x);
             (0..=n)
                 .map(|i| {
-                    let t = e.start_angle
+                    let t = start
                         + if e.counter_clockwise { 1.0 } else { -1.0 } * sweep.abs() * i as f64
                             / n as f64;
                     e.center + ux * (a * t.cos()) + uy * (a * e.minor_axis_ratio * t.sin())
@@ -530,8 +540,31 @@ fn line_intersections(hatch: &Hatch, p: Vector2, d: Vector2) -> Vec<f64> {
         for edge in &path.edges {
             match edge {
                 BoundaryEdge::Line(e) => intersect_line_segment(p, d, e, &mut out),
-                BoundaryEdge::CircularArc(e) => intersect_circle_arc(p, d, e, &mut out),
-                BoundaryEdge::EllipticArc(e) => intersect_ellipse_arc(p, d, e, &mut out),
+                BoundaryEdge::CircularArc(e) => {
+                    let (start, end) = if e.counter_clockwise {
+                        (e.start_angle, e.end_angle)
+                    } else {
+                        (-e.start_angle, -e.end_angle)
+                    };
+                    intersect_circle_arc(
+                        p,
+                        d,
+                        e.center,
+                        e.radius,
+                        start,
+                        end,
+                        e.counter_clockwise,
+                        &mut out,
+                    );
+                }
+                BoundaryEdge::EllipticArc(e) => {
+                    let (start, end) = if e.counter_clockwise {
+                        (e.start_angle, e.end_angle)
+                    } else {
+                        (-e.start_angle, -e.end_angle)
+                    };
+                    intersect_ellipse_arc(p, d, e, start, end, &mut out);
+                }
                 BoundaryEdge::Polyline(e) => intersect_polyline(p, d, e, &mut out),
                 BoundaryEdge::Spline(e) => intersect_spline(p, d, e, &mut out),
             }
@@ -556,10 +589,19 @@ fn intersect_line_segment(p: Vector2, d: Vector2, e: &LineEdge, out: &mut Vec<f6
     }
 }
 
-fn intersect_circle_arc(p: Vector2, d: Vector2, e: &CircularArcEdge, out: &mut Vec<f64>) {
-    let q = p - e.center;
+fn intersect_circle_arc(
+    p: Vector2,
+    d: Vector2,
+    center: Vector2,
+    radius: f64,
+    start: f64,
+    end: f64,
+    counter_clockwise: bool,
+    out: &mut Vec<f64>,
+) {
+    let q = p - center;
     let b = 2.0 * q.dot(&d);
-    let c = q.dot(&q) - e.radius * e.radius;
+    let c = q.dot(&q) - radius * radius;
     let disc = b * b - 4.0 * c;
     if disc < -EPS {
         return;
@@ -567,14 +609,21 @@ fn intersect_circle_arc(p: Vector2, d: Vector2, e: &CircularArcEdge, out: &mut V
     let root = disc.max(0.0).sqrt();
     for t in [(-b - root) * 0.5, (-b + root) * 0.5] {
         let point = p + d * t;
-        let theta = (point.y - e.center.y).atan2(point.x - e.center.x);
-        if angle_on_arc(theta, e.start_angle, e.end_angle, e.counter_clockwise) {
+        let theta = (point.y - center.y).atan2(point.x - center.x);
+        if angle_on_arc(theta, start, end, counter_clockwise) {
             out.push(t);
         }
     }
 }
 
-fn intersect_ellipse_arc(p: Vector2, d: Vector2, e: &EllipticArcEdge, out: &mut Vec<f64>) {
+fn intersect_ellipse_arc(
+    p: Vector2,
+    d: Vector2,
+    e: &EllipticArcEdge,
+    start: f64,
+    end: f64,
+    out: &mut Vec<f64>,
+) {
     let a = e.major_axis_endpoint.length();
     let b = a * e.minor_axis_ratio.abs();
     if a <= EPS || b <= EPS {
@@ -599,7 +648,7 @@ fn intersect_ellipse_arc(p: Vector2, d: Vector2, e: &EllipticArcEdge, out: &mut 
         let point = p + d * t;
         let q = point - e.center;
         let theta = (q.dot(&uy) / b).atan2(q.dot(&ux) / a);
-        if angle_on_arc(theta, e.start_angle, e.end_angle, e.counter_clockwise) {
+        if angle_on_arc(theta, start, end, e.counter_clockwise) {
             out.push(t);
         }
     }
@@ -626,18 +675,7 @@ fn intersect_polyline(p: Vector2, d: Vector2, e: &PolylineEdge, out: &mut Vec<f6
             );
         } else {
             let (center, radius, start, end, ccw) = bulge_arc(a, b, a.z);
-            intersect_circle_arc(
-                p,
-                d,
-                &CircularArcEdge {
-                    center,
-                    radius,
-                    start_angle: start,
-                    end_angle: end,
-                    counter_clockwise: ccw,
-                },
-                out,
-            );
+            intersect_circle_arc(p, d, center, radius, start, end, ccw, out);
         }
     }
 }
@@ -684,7 +722,7 @@ fn inside_fill(point: Vector2, loops: &[LoopGeometry], style: HatchStyleType) ->
     match style {
         HatchStyleType::Ignore => contains.iter().any(|v| *v),
         HatchStyleType::Outer => {
-            // The outermost loop is the one with the largest area.  AutoCAD's
+            // The outermost loop is the one with the largest area.  ACAD's
             // OUTER style ignores all nested islands.
             let outer = loops
                 .iter()

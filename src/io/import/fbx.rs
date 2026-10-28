@@ -1,7 +1,10 @@
 //! FBX (Filmbox) importer.
 //!
 //! Supports FBX binary format (versions 7100–7700, i.e. FBX 2011–2020+) and
-//! ASCII FBX.  Produces one [`Mesh`] entity per geometry node.
+//! ASCII FBX.  Produces one [`Mesh`] entity per geometry node. Placement uses
+//! each model's `Lcl Translation`, `Lcl Rotation` (Euler XYZ degrees), and
+//! `Lcl Scaling`, composed with parent models. Pivots and pre/post rotation
+//! are left at identity.
 //!
 //! # Example
 //!
@@ -11,21 +14,20 @@
 //! let doc = FbxImporter::from_file("model.fbx")?.import()?;
 //! ```
 
-use std::collections::HashMap;
-use std::fs;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read};
 use std::path::Path;
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::document::CadDocument;
-use crate::entities::mesh::{Mesh, MeshFace};
+use crate::entities::mesh::Mesh;
 use crate::entities::EntityType;
 use crate::error::{DxfError, Result};
-use crate::types::Vector3;
 
-use super::color_mapping::{create_material_layer, rgb_to_color};
-use super::ImportConfig;
+use super::color_mapping::{color_from_unit_rgb, create_material_layer};
+use super::mesh::{is_identity, mesh_from_indexed, transform_positions, trs_euler_xyz, IDENTITY};
+use super::{read_path_bytes, read_reader_bytes, ImportConfig};
 
 // ─── FBX node tree ───────────────────────────────────────────────────────
 
@@ -76,6 +78,19 @@ impl FbxNode {
         })
     }
 
+    fn prop_f64(&self, index: usize) -> Option<f64> {
+        self.properties
+            .get(index)
+            .and_then(|property| match property {
+                FbxProp::F64(value) => Some(*value),
+                FbxProp::F32(value) => Some(*value as f64),
+                FbxProp::I64(value) => Some(*value as f64),
+                FbxProp::I32(value) => Some(*value as f64),
+                FbxProp::I16(value) => Some(*value as f64),
+                _ => None,
+            })
+    }
+
     fn prop_f64_array(&self, index: usize) -> Option<&Vec<f64>> {
         self.properties.get(index).and_then(|p| match p {
             FbxProp::ArrayF64(v) => Some(v),
@@ -108,6 +123,11 @@ struct FbxMaterialInfo {
     diffuse: [f32; 3],
 }
 
+struct FbxModel {
+    name: String,
+    local: [f64; 16],
+}
+
 // ─── FBX Importer ────────────────────────────────────────────────────────
 
 /// FBX file importer.
@@ -119,16 +139,8 @@ pub struct FbxImporter {
 impl FbxImporter {
     /// Create an importer from a file path.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let mut file = fs::File::open(path).map_err(|e| {
-            DxfError::ImportError(format!("Cannot open '{}': {}", path.display(), e))
-        })?;
-        let mut data = Vec::new();
-        file.read_to_end(&mut data).map_err(|e| {
-            DxfError::ImportError(format!("Cannot read '{}': {}", path.display(), e))
-        })?;
         Ok(Self {
-            data,
+            data: read_path_bytes(path.as_ref())?,
             config: ImportConfig::default(),
         })
     }
@@ -142,13 +154,9 @@ impl FbxImporter {
     }
 
     /// Create an importer from a reader.
-    pub fn from_reader<R: Read>(mut reader: R) -> Result<Self> {
-        let mut data = Vec::new();
-        reader
-            .read_to_end(&mut data)
-            .map_err(|e| DxfError::ImportError(format!("Cannot read FBX data: {}", e)))?;
+    pub fn from_reader<R: Read>(reader: R) -> Result<Self> {
         Ok(Self {
-            data,
+            data: read_reader_bytes(reader, "FBX data")?,
             config: ImportConfig::default(),
         })
     }
@@ -180,11 +188,13 @@ impl FbxImporter {
             None => return Ok(doc), // No objects
         };
 
-        // Extract geometries
-        let mut geometries: HashMap<i64, FbxGeometry> = HashMap::new();
+        // Extract geometries in file order so entity order stays stable.
+        let mut geometries: Vec<FbxGeometry> = Vec::new();
+        let mut geometry_ids: HashMap<i64, usize> = HashMap::new();
         for node in objects.children_named("Geometry") {
             if let Some(geom) = extract_geometry(node) {
-                geometries.insert(geom.id, geom);
+                geometry_ids.insert(geom.id, geometries.len());
+                geometries.push(geom);
             }
         }
 
@@ -196,14 +206,18 @@ impl FbxImporter {
             }
         }
 
-        // Extract model names
-        let mut model_names: HashMap<i64, String> = HashMap::new();
+        let mut models: HashMap<i64, FbxModel> = HashMap::new();
         for node in objects.children_named("Model") {
             if let Some(id) = node.prop_i64(0) {
-                let name = node.prop_str(1).unwrap_or("Model").to_string();
-                // FBX names often have "Model::" prefix
-                let clean = name.rsplit("::").next().unwrap_or(&name).trim().to_string();
-                model_names.insert(id, clean);
+                let name = node.prop_str(1).unwrap_or("Model");
+                let clean = name.rsplit("::").next().unwrap_or(name).trim().to_string();
+                models.insert(
+                    id,
+                    FbxModel {
+                        name: clean,
+                        local: model_local_matrix(node),
+                    },
+                );
             }
         }
 
@@ -211,18 +225,20 @@ impl FbxImporter {
         let connections = nodes.iter().find(|n| n.name == "Connections");
         let mut geom_to_model: HashMap<i64, i64> = HashMap::new();
         let mut mat_to_model: HashMap<i64, Vec<i64>> = HashMap::new();
+        let mut model_parent: HashMap<i64, i64> = HashMap::new();
 
         if let Some(conn_node) = connections {
             for c in conn_node.children_named("C") {
                 if c.properties.len() >= 3 {
                     if let (Some(child_id), Some(parent_id)) = (c.prop_i64(1), c.prop_i64(2)) {
-                        // Check if child is a geometry
-                        if geometries.contains_key(&child_id) {
+                        if geometry_ids.contains_key(&child_id) {
                             geom_to_model.insert(child_id, parent_id);
                         }
-                        // Check if child is a material
                         if materials.contains_key(&child_id) {
                             mat_to_model.entry(parent_id).or_default().push(child_id);
+                        }
+                        if models.contains_key(&child_id) && models.contains_key(&parent_id) {
+                            model_parent.insert(child_id, parent_id);
                         }
                     }
                 }
@@ -230,11 +246,11 @@ impl FbxImporter {
         }
 
         // Build meshes
-        for (geom_id, geom) in &geometries {
-            let model_id = geom_to_model.get(geom_id).copied();
+        for geom in &geometries {
+            let model_id = geom_to_model.get(&geom.id).copied();
             let model_name = model_id
-                .and_then(|id| model_names.get(&id))
-                .cloned()
+                .and_then(|id| models.get(&id))
+                .map(|model| model.name.clone())
                 .unwrap_or_else(|| geom.name.clone());
 
             // Get material for this model
@@ -244,19 +260,24 @@ impl FbxImporter {
                 .and_then(|mat_id| materials.get(mat_id));
 
             let (layer_label, color) = if let Some(mat) = mat_info {
-                let c = rgb_to_color(
-                    (mat.diffuse[0] * 255.0) as u8,
-                    (mat.diffuse[1] * 255.0) as u8,
-                    (mat.diffuse[2] * 255.0) as u8,
-                    true,
-                );
+                let c = color_from_unit_rgb(mat.diffuse[0], mat.diffuse[1], mat.diffuse[2]);
                 (mat.name.clone(), c)
             } else {
                 (model_name.clone(), self.config.default_color)
             };
 
+            let world = model_id
+                .map(|id| model_world(id, &models, &model_parent))
+                .unwrap_or(IDENTITY);
+            let transformed;
+            let positions: &[[f64; 3]] = if is_identity(&world) {
+                &geom.vertices
+            } else {
+                transformed = transform_positions(&geom.vertices, &world);
+                &transformed
+            };
             let mesh = build_fbx_mesh(
-                &geom.vertices,
+                positions,
                 &geom.polygon_indices,
                 scale,
                 self.config.merge_vertices,
@@ -937,99 +958,59 @@ fn build_fbx_mesh(
     }
 
     if merge {
-        build_merged_fbx(vertices, &triangles, scale, tolerance)
+        mesh_from_indexed(vertices, &triangles, scale, true, tolerance)
     } else {
-        build_unmerged_fbx(vertices, &triangles, scale)
+        mesh_from_indexed(vertices, &triangles, scale, false, tolerance)
     }
 }
 
-fn build_unmerged_fbx(positions: &[[f64; 3]], triangles: &[[usize; 3]], scale: f64) -> Mesh {
-    let mut verts = Vec::with_capacity(triangles.len() * 3);
-    let mut faces = Vec::with_capacity(triangles.len());
-
-    for tri in triangles {
-        let base = verts.len();
-        for &idx in tri {
-            let p = if idx < positions.len() {
-                positions[idx]
-            } else {
-                [0.0; 3]
+fn model_local_matrix(node: &FbxNode) -> [f64; 16] {
+    let mut translation = [0.0; 3];
+    let mut rotation = [0.0; 3];
+    let mut scale = [1.0; 3];
+    if let Some(properties) = node.child("Properties70") {
+        for property in properties.children_named("P") {
+            let Some(name) = property.prop_str(0) else {
+                continue;
             };
-            verts.push(Vector3::new(p[0] * scale, p[1] * scale, p[2] * scale));
+            let Some(x) = property.prop_f64(4) else {
+                continue;
+            };
+            let Some(y) = property.prop_f64(5) else {
+                continue;
+            };
+            let Some(z) = property.prop_f64(6) else {
+                continue;
+            };
+            match name {
+                "Lcl Translation" => translation = [x, y, z],
+                "Lcl Rotation" => rotation = [x, y, z],
+                "Lcl Scaling" => scale = [x, y, z],
+                _ => {}
+            }
         }
-        faces.push(MeshFace::triangle(base, base + 1, base + 2));
     }
-
-    let mut mesh = Mesh::new();
-    mesh.vertices = verts;
-    mesh.faces = faces;
-    mesh.compute_edges();
-    mesh
+    trs_euler_xyz(translation, rotation, scale)
 }
 
-fn build_merged_fbx(
-    positions: &[[f64; 3]],
-    triangles: &[[usize; 3]],
-    scale: f64,
-    tolerance: f64,
-) -> Mesh {
-    let inv_tol = if tolerance > 0.0 {
-        1.0 / tolerance
-    } else {
-        1e9
-    };
-    let mut mesh_verts: Vec<Vector3> = Vec::new();
-    let mut vert_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
-    let mut faces = Vec::with_capacity(triangles.len());
-
-    let mut get_or_insert = |p: [f64; 3]| -> usize {
-        let x = p[0] * scale;
-        let y = p[1] * scale;
-        let z = p[2] * scale;
-        let key = (
-            (x * inv_tol).round() as i64,
-            (y * inv_tol).round() as i64,
-            (z * inv_tol).round() as i64,
-        );
-        if let Some(&idx) = vert_map.get(&key) {
-            idx
-        } else {
-            let idx = mesh_verts.len();
-            mesh_verts.push(Vector3::new(x, y, z));
-            vert_map.insert(key, idx);
-            idx
+fn model_world(id: i64, models: &HashMap<i64, FbxModel>, parents: &HashMap<i64, i64>) -> [f64; 16] {
+    let mut chain = Vec::new();
+    let mut current = Some(id);
+    let mut seen = HashSet::new();
+    while let Some(model_id) = current {
+        if !seen.insert(model_id) || chain.len() >= 64 {
+            break;
         }
-    };
-
-    for tri in triangles {
-        let p0 = if tri[0] < positions.len() {
-            positions[tri[0]]
-        } else {
-            [0.0; 3]
-        };
-        let p1 = if tri[1] < positions.len() {
-            positions[tri[1]]
-        } else {
-            [0.0; 3]
-        };
-        let p2 = if tri[2] < positions.len() {
-            positions[tri[2]]
-        } else {
-            [0.0; 3]
-        };
-        let i0 = get_or_insert(p0);
-        let i1 = get_or_insert(p1);
-        let i2 = get_or_insert(p2);
-        if i0 != i1 && i1 != i2 && i0 != i2 {
-            faces.push(MeshFace::triangle(i0, i1, i2));
+        if let Some(model) = models.get(&model_id) {
+            chain.push(model.local);
         }
+        current = parents.get(&model_id).copied();
     }
-
-    let mut mesh = Mesh::new();
-    mesh.vertices = mesh_verts;
-    mesh.faces = faces;
-    mesh.compute_edges();
-    mesh
+    let mut world = IDENTITY;
+    for local in chain.iter().rev() {
+        world = super::mesh::mul_matrix(&world, local);
+    }
+    world
 }
 
 #[cfg(test)]
@@ -1131,5 +1112,43 @@ mod tests {
         let objects = nodes.iter().find(|n| n.name == "Objects").unwrap();
         let geom_nodes = objects.children_named("Geometry");
         assert_eq!(geom_nodes.len(), 1);
+    }
+
+    #[test]
+    fn parent_translation_is_applied() {
+        let fbx_text = br#"Objects: {
+    Geometry: 10, "Geometry::Tri", "Mesh" {
+        Vertices: *9 {
+            a: 0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0,0.0
+        }
+        PolygonVertexIndex: *3 {
+            a: 0,1,-3
+        }
+    }
+    Model: 20, "Model::Child", "Mesh" {
+        Properties70: {
+            P: "Lcl Translation", "Lcl Translation", "", "A", 1.0, 0.0, 0.0
+        }
+    }
+    Model: 30, "Model::Parent", "Null" {
+        Properties70: {
+            P: "Lcl Translation", "Lcl Translation", "", "A", 10.0, 0.0, 0.0
+        }
+    }
+}
+Connections: {
+    C: "OO", 10, 20
+    C: "OO", 20, 30
+}
+"#;
+        let doc = FbxImporter::from_bytes(fbx_text.to_vec()).import().unwrap();
+        let entities: Vec<_> = doc.entities().collect();
+        let EntityType::Mesh(mesh) = &entities[0] else {
+            panic!("Expected Mesh");
+        };
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| (vertex.x - 11.0).abs() < 1e-8 && vertex.y == 0.0 && vertex.z == 0.0));
     }
 }

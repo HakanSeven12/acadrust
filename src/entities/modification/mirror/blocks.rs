@@ -20,7 +20,7 @@ pub(crate) fn mirror_insert_with_options(
     let mut attributes = std::mem::take(&mut e.attributes);
     transform::transform_insert(e, transform);
     if transform::is_reflecting(transform) {
-        // AutoCAD keeps the Y scale sign and records reflection in X.
+        // ACAD keeps the Y scale sign and records reflection in X.
         e.rotation = (e.rotation + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
         e.set_x_scale(-e.x_scale());
         e.set_y_scale(-e.y_scale());

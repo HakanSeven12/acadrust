@@ -1,9 +1,10 @@
 //! Native models for class-based, non-graphical DWG/DXF objects.
 //!
 //! These objects are registered through the CLASSES section rather than fixed
-//! object type codes.  The payloads below follow LibreDWG `dwg2.spec`; unlike
-//! proxy/unknown records they remain editable and can be encoded for another
-//! file version.
+//! object type codes. ODA §10 describes the class registration and positional
+//! type-code rules, but does not specify these payloads. Implemented payloads
+//! are retained as editable models based on native-format probes and regression
+//! tests; individual class coverage is not a claim of a complete published spec.
 
 use crate::types::{Color, Handle, Vector2, Vector3};
 

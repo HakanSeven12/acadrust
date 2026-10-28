@@ -1,7 +1,7 @@
 //! Identities assigned when a pre-R13 database is imported into the object model.
 //! R12 tables have indices rather than stored handles. Reserve the importer
 //! defaults first, then allocate in table order, independent of DXF reader state.
-//! Allocation order is based on independent imports into AutoCAD 2024/2025/2027;
+//! Allocation order is based on independent imports into ACAD 2024/2025/2027;
 //! these are synthesized import identities, not fields stored in the R12 file.
 
 use super::entities::EntityRecord;

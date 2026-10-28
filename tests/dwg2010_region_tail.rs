@@ -8,8 +8,8 @@ use acadrust::io::dwg::dwg_stream_writers::bit_writer::DwgBitWriter;
 use acadrust::io::dwg::DwgVersion;
 use acadrust::{DxfVersion, Handle, SabWriter};
 
-// Encode independently of the entity writer: both native AC1024 cache
-// layouts exist. An absent isoline cache may still carry BL(0) silhouettes.
+// ODA DWG section 20.4.41 keeps the silhouette count when the isoline cache
+// is absent, including BL(0). A stream that skips the count is incomplete.
 fn record(
     offset: i64,
     silhouettes: Option<i32>,
@@ -56,43 +56,47 @@ fn record(
 #[test]
 fn ac1024_empty_silhouette_count_preserves_geometry_and_materials() {
     for offset in 0..8 {
-        for silhouettes in [None, Some(0)] {
-            for materials in [0, 1] {
-                let (mut reader, sab, end) = record(offset, silhouettes, materials);
-                let data =
-                    read_acis_entity(&mut reader, DwgVersion::AC24, DxfVersion::AC1024, false);
-                reader.check_error().unwrap_or_else(|error| {
-                    panic!("offset={offset}, silhouettes={silhouettes:?}, materials={materials}: {error}")
-                });
-                assert_eq!(reader.position_in_bits(), end);
-                assert_eq!(data.sab_data, sab);
-                assert_eq!(data.version, 2);
-                assert!(data.is_binary);
-                assert!(data.wireframe_data_present);
-                assert!(!data.wireframe_point_present);
-                assert!(!data.wireframe_isoline_present);
-                assert_eq!(data.isolines, 0);
-                assert!(data.wires.is_empty());
-                assert!(data.silhouettes.is_empty());
-                assert!(data.acis_empty_bit);
-                assert!(data.extra_acis_data.is_none());
-                let expected = if materials == 0 {
-                    vec![]
-                } else {
-                    vec![AcisMaterial {
-                        array_index: 7,
-                        absolute_reference: 9,
-                        material_handle: Some(Handle::new(0x1234)),
-                    }]
-                };
-                assert_eq!(data.materials, expected);
-            }
+        for materials in [0, 1] {
+            let (mut reader, sab, end) = record(offset, Some(0), materials);
+            let data = read_acis_entity(&mut reader, DwgVersion::AC24, DxfVersion::AC1024, false);
+            reader
+                .check_error()
+                .unwrap_or_else(|error| panic!("offset={offset}, materials={materials}: {error}"));
+            assert_eq!(reader.position_in_bits(), end);
+            assert_eq!(data.sab_data, sab);
+            assert_eq!(data.version, 2);
+            assert!(data.is_binary);
+            assert!(data.wireframe_data_present);
+            assert!(!data.wireframe_point_present);
+            assert!(!data.wireframe_isoline_present);
+            assert_eq!(data.isolines, 0);
+            assert!(data.wires.is_empty());
+            assert!(data.silhouettes.is_empty());
+            assert!(data.acis_empty_bit);
+            assert!(data.extra_acis_data.is_none());
+            let expected = if materials == 0 {
+                vec![]
+            } else {
+                vec![AcisMaterial {
+                    array_index: 7,
+                    absolute_reference: 9,
+                    material_handle: Some(Handle::new(0x1234)),
+                }]
+            };
+            assert_eq!(data.materials, expected);
+
+            let (mut reader, _, end) = record(offset, None, materials);
+            read_acis_entity(&mut reader, DwgVersion::AC24, DxfVersion::AC1024, false);
+            assert!(
+                reader.check_error().is_err() || reader.position_in_bits() != end,
+                "missing silhouette count accepted: offset={offset}, materials={materials}"
+            );
         }
     }
 }
 
 #[test]
-fn ac1024_silhouette_probe_does_not_accept_truncation_or_invalid_counts() {
+fn ac1024_silhouette_count_does_not_accept_truncation_or_invalid_counts() {
     for offset in 0..8 {
         for silhouettes in [None, Some(0)] {
             for materials in [0, 1] {
@@ -135,7 +139,7 @@ fn missing_material_count_is_not_a_complete_record() {
 
 #[test]
 fn multiple_material_bindings_are_preserved() {
-    for silhouettes in [None, Some(0)] {
+    for silhouettes in [Some(0)] {
         let (mut reader, sab, end) = record(3, silhouettes, 2);
         let data = read_acis_entity(&mut reader, DwgVersion::AC24, DxfVersion::AC1024, false);
         reader.check_error().unwrap();

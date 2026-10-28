@@ -332,7 +332,7 @@ impl DwgMergedReader {
         }
         if count < 0 || bits_per_item <= 0 || count > self.main_remaining_bits() / bits_per_item {
             self.invalidate(format!(
-                "Invalid DWG count {count}: needs {bits_per_item} main bits per item, {} remain",
+                "Invalid DWG array count {count}: needs {bits_per_item} main bits per item, {} remain",
                 self.main_remaining_bits()
             ));
             return 0;

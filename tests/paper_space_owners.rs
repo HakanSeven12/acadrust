@@ -73,7 +73,9 @@ fn paper_space_insert_attributes_survive_dxf_to_dwg() {
         AttributeEntity::new("A".into(), "one".into()),
         AttributeEntity::new("B".into(), "two".into()),
     ];
-    let model = source.add_entity(EntityType::Insert(insert.clone())).unwrap();
+    let model = source
+        .add_entity(EntityType::Insert(insert.clone()))
+        .unwrap();
     let paper = source
         .add_entity_to_layout(EntityType::Insert(insert), "Layout1")
         .unwrap();
@@ -85,13 +87,18 @@ fn paper_space_insert_attributes_survive_dxf_to_dwg() {
     };
     let paper_attributes = attributes(&from_dxf, paper);
     assert!(
-        paper_attributes.iter().all(|a| a.common.entity_mode == Some(1)),
+        paper_attributes
+            .iter()
+            .all(|a| a.common.entity_mode == Some(1)),
         "the DXF repro must carry the paper flag on its ATTRIBs"
     );
 
     let back = via_dwg(&from_dxf);
     for handle in [model, paper] {
-        let tags: Vec<_> = attributes(&back, handle).into_iter().map(|a| a.tag).collect();
+        let tags: Vec<_> = attributes(&back, handle)
+            .into_iter()
+            .map(|a| a.tag)
+            .collect();
         assert_eq!(tags, ["A", "B"]);
     }
 }

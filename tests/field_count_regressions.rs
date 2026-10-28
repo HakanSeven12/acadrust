@@ -203,9 +203,15 @@ fn object_fields_measure_polylines() {
         fields::evaluate_code(&doc, &code, &[handle], None, &ctx)
     };
     let half_disc = std::f64::consts::PI / 2.0;
-    assert_eq!(value("Area").as_deref(), Some(format!("{:.4}", 8.0 + half_disc).as_str()));
+    assert_eq!(
+        value("Area").as_deref(),
+        Some(format!("{:.4}", 8.0 + half_disc).as_str())
+    );
     let perimeter = 10.0 + std::f64::consts::PI;
-    assert_eq!(value("Length").as_deref(), Some(format!("{perimeter:.4}").as_str()));
+    assert_eq!(
+        value("Length").as_deref(),
+        Some(format!("{perimeter:.4}").as_str())
+    );
 }
 
 #[test]

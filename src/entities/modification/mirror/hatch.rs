@@ -30,7 +30,7 @@ pub(crate) fn mirror_hatch_with_options(
         e.common.extended_data = old_extended_data;
     }
     if reflecting {
-        // AutoCAD retains the authored angle while MIRRHATCH controls the
+        // ACAD retains the authored angle while MIRRHATCH controls the
         // explicit line families. Their transformed angles carry reflection.
         e.pattern_angle = pattern_angle;
     }

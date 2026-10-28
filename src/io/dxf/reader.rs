@@ -37,7 +37,7 @@ pub struct DxfReaderConfiguration {
     /// Default encoding to use for non-UTF8 strings if the DXF file does not
     /// specify it via $DWGCODEPAGE.
     ///
-    /// Only applies to DXF versions prior to AC1021 (AutoCAD 2007).
+    /// Only applies to DXF versions prior to AC1021 (ACAD 2007).
     pub default_encoding: Option<String>,
 }
 
@@ -400,12 +400,12 @@ impl DxfReader {
             let layers: HashMap<_, _> = document
                 .layers
                 .iter()
-                .map(|layer| (layer.name.to_uppercase(), layer.handle))
+                .map(|layer| (crate::tables::normalize_name(&layer.name), layer.handle))
                 .collect();
             for entity in document.entities_mut_keep_raw() {
                 if let EntityType::Viewport(viewport) = entity {
                     crate::io::dwg::legacy_viewport::restore_r12(viewport, |name| {
-                        layers.get(&name.to_uppercase()).copied()
+                        layers.get(&crate::tables::normalize_name(name)).copied()
                     });
                 }
             }

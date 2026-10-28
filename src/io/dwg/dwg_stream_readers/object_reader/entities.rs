@@ -20,7 +20,6 @@ use crate::entities::{
     PointCloudExCrop, PointCloudExData, ProxyEntityData, RegisteredClassEntityData, RemoteTextData,
     SectionObjectData, SurfaceData, SurfaceKind, SurfaceSweepOptions,
 };
-use crate::io::dwg::dwg_stream_readers::bit_reader::DwgBitReader;
 use crate::io::dwg::dwg_stream_readers::merged_reader::DwgMergedReader;
 use crate::io::dwg::dwg_version::DwgVersion;
 use crate::io::dwg::mesh_budget::MeshFaceBudget;
@@ -1441,6 +1440,10 @@ pub fn read_spline(
                 fit_points.push(reader.read_3bit_double());
             }
         }
+    }
+
+    if scenario != 1 && !closed && fit_points.len() >= 3 && fit_points.first() == fit_points.last() {
+        closed = true;
     }
 
     SplineData {
@@ -3911,10 +3914,10 @@ fn read_table_cell_data(
             style.fill_enabled = !reader.read_bit();
         }
         if flags & 0x04 != 0 {
-            style.background_color = reader.read_cm_color();
+            style.background_color = reader.read_cm_true_color();
         }
         if flags & 0x08 != 0 {
-            style.content_color = reader.read_cm_color();
+            style.content_color = reader.read_cm_true_color();
         }
         if flags & 0x10 != 0 {
             let handle = reader.read_handle();
@@ -3931,7 +3934,7 @@ fn read_table_cell_data(
             (0x200, 0x2000, &mut style.left_border),
         ] {
             if flags & color_bit != 0 {
-                border.color = reader.read_cm_color();
+                border.color = reader.read_cm_true_color();
             }
             if flags & lw_bit != 0 {
                 border.line_weight = crate::types::LineWeight::from_value(reader.read_bit_short());
@@ -3978,7 +3981,7 @@ fn read_legacy_table_style_override(reader: &mut DwgMergedReader) -> LegacyTable
     }
     for bit in [0x0020, 0x0040, 0x0080] {
         if flags & bit != 0 {
-            value.row_colors.push(reader.read_cm_color());
+            value.row_colors.push(reader.read_cm_true_color());
         }
     }
     for bit in [0x0100, 0x0200, 0x0400] {
@@ -3988,7 +3991,7 @@ fn read_legacy_table_style_override(reader: &mut DwgMergedReader) -> LegacyTable
     }
     for bit in [0x0800, 0x1000, 0x2000] {
         if flags & bit != 0 {
-            value.row_fill_colors.push(reader.read_cm_color());
+            value.row_fill_colors.push(reader.read_cm_true_color());
         }
     }
     for bit in [0x4000, 0x8000, 0x10000] {
@@ -4016,7 +4019,7 @@ fn read_legacy_border_colors(reader: &mut DwgMergedReader) -> LegacyBorderOverri
     let mut values = Vec::new();
     for bit in 0..18 {
         if flags & (1 << bit) != 0 {
-            values.push(reader.read_cm_color());
+            values.push(reader.read_cm_true_color());
         }
     }
     LegacyBorderOverrides { flags, values }
@@ -4731,7 +4734,7 @@ pub fn read_multileader(
     let mut text_bottom_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default
     let mut text_top_attachment: i16 = 9; // CenterOfText — matches MultiLeader::new() default
     if version.r2010_plus() {
-        // Order: dir (271), bottom (272), top (273) — per AutoCAD.
+        // Order: dir (271), bottom (272), top (273) — per ACAD.
         text_attachment_direction = reader.read_bit_short();
         text_bottom_attachment = reader.read_bit_short();
         text_top_attachment = reader.read_bit_short();
@@ -5090,10 +5093,10 @@ fn read_leader_line(reader: &mut DwgMergedReader, version: DwgVersion) -> Leader
     let mut line_color = Color::ByBlock;
     let mut line_type_handle: Option<Handle> = None;
     // Defaults for a pre-R2010 source upconverted to R2010+: a leader line that
-    // does not override these must match AutoCAD's emission — ByBlock weight and
+    // does not override these must match ACAD's emission — ByBlock weight and
     // a 0.0 arrow size. 0.0 is load-bearing: write_bit_double emits the 2-bit
     // BD-zero code, not a 66-bit double, so the annotation context stays the
-    // length AutoCAD's R2018 reader expects (a non-zero default over-runs it →
+    // length ACAD's R2018 reader expects (a non-zero default over-runs it →
     // eDwgObjectImproperlyRead).
     let mut line_weight = crate::types::LineWeight::ByBlock;
     let mut arrowhead_size = 0.0;
@@ -5185,40 +5188,6 @@ pub struct SurfaceEntityData {
     pub v_isolines: i16,
     pub surface_data: SurfaceData,
     pub history_handle: u64,
-}
-
-/// Writers disagree on whether an absent isoline cache still stores the
-/// silhouette count: most files keep it (zero included), others go straight
-/// to the modeler tail. The count is absent only when the complete tail
-/// (empty-body bit, material bindings, and optional revision) fills the main
-/// stream from here. Never infer a missing material count.
-fn silhouette_count_absent(reader: &DwgMergedReader, with_revision: bool) -> bool {
-    let end = reader.position_in_bits() + reader.main_remaining_bits();
-    modeler_tail_fits(reader.main().clone(), end, with_revision)
-}
-
-fn modeler_tail_fits(mut probe: DwgBitReader, end: i64, with_revision: bool) -> bool {
-    // A cleared bit means an extra modeler body follows; not probed here.
-    if !probe.read_bit() {
-        return false;
-    }
-    let materials = probe.read_bit_long();
-    if !(0..=4096).contains(&materials) {
-        return false;
-    }
-    for _ in 0..materials {
-        probe.read_bit_long();
-        probe.read_bit_long();
-    }
-    if with_revision {
-        probe.read_bit();
-        probe.read_bit_long();
-        probe.read_bit_short();
-        probe.read_bit_short();
-        probe.read_bytes(8);
-        probe.read_bit_long();
-    }
-    !probe.has_error() && probe.position_in_bits() == end
 }
 
 /// Read modeler-geometry (ACIS) data shared by 3DSOLID, REGION, BODY.
@@ -5536,7 +5505,7 @@ fn read_acis_entity_impl(
     // Wireframe data (version=1 SAT, R2004–R2006 inline SAB and AcDs-backed
     // empty bodies; R2007+ inline SAB may return early above).
     // Layout per LibreDWG COMMON_3DSOLID,
-    // bit-verified against an AutoCAD AC1015 (R2000) v1-SAT sample — the
+    // bit-verified against an ACAD AC1015 (R2000) v1-SAT sample — the
     // `point` decodes to the body's exact bounding-box centre only WITH the
     // point_present gate (AC1032's solids are SAB and skip this path, so it
     // was never really exercised before):
@@ -5564,27 +5533,6 @@ fn read_acis_entity_impl(
         }
         isolines = reader.read_bit_long();
         isoline_present = reader.read_bit();
-        // Writers disagree on whether an absent isoline cache keeps the
-        // silhouette count; where both forms are known, probe the tail.
-        let silhouette_count_absent = if !isoline_present
-            && has_ds_data
-            && version.r2013_plus(dxf_version)
-            && inline_end.is_none()
-        {
-            silhouette_count_absent(reader, true)
-        } else if !isoline_present
-            && dxf_version == DxfVersion::AC1024
-            && acis_version == 2
-            && !has_ds_data
-            && !inline_layout
-            && inline_end.is_none()
-        {
-            // Native DWG 2010 REGIONs can retain BL(0) silhouettes despite
-            // an absent isoline cache. Require the exact material-tail bound.
-            silhouette_count_absent(reader, false)
-        } else {
-            false
-        };
         if isoline_present {
             let num_wires = safe_count(reader.read_bit_long(), reader);
             for _ in 0..num_wires {
@@ -5595,11 +5543,7 @@ fn read_acis_entity_impl(
         // The isoline flag gates only the wire array. The silhouette
         // count is always present in a wireframe block, including zero
         // when there are no silhouettes (ODA DWG spec, section 20.4.41).
-        let num_silhouettes = if silhouette_count_absent {
-            0
-        } else {
-            safe_count(reader.read_bit_long(), reader)
-        };
+        let num_silhouettes = safe_count(reader.read_bit_long(), reader);
         for _ in 0..num_silhouettes {
             // Native R2010+ silhouettes store a BLL viewport identity.
             // Earlier records use BL, including compact zero identities.
@@ -5674,7 +5618,7 @@ fn read_acis_entity_impl(
     }
 
     // R2013+ (AC1027+): the modeler-geometry revision block. It must be read
-    // (and later written back) or the entity stream desyncs — AutoCAD/TrueView
+    // (and later written back) or the entity stream desyncs — ACAD/TrueView
     // then reject the file.
     let revision = if version.r2013_plus(dxf_version) {
         let has_guid = reader.read_bit();
@@ -6132,12 +6076,9 @@ mod tests {
 
     #[test]
     fn r2004_surface_keeps_a_second_modeler_body_ahead_of_isolines() {
-        let sab = crate::entities::acis::SabWriter::write(&crate::entities::acis::primitives::build_box(
-            [0.0, 0.0, 0.0],
-            1.0,
-            2.0,
-            3.0,
-        ));
+        let sab = crate::entities::acis::SabWriter::write(
+            &crate::entities::acis::primitives::build_box([0.0, 0.0, 0.0], 1.0, 2.0, 3.0),
+        );
         let dwg = DwgVersion::AC18;
         let dxf = DxfVersion::AC1018;
         let mut reader = make_reader(dwg, dxf, |writer| {
@@ -6537,8 +6478,8 @@ mod tests {
         assert!(result.sab_data.is_empty());
     }
 
-    /// AcDs-backed R2018 solids (civil design templates) store a point but no
-    /// isoline cache, with or without a zero silhouette count before the tail.
+    /// AcDs-backed R2018 solids store a point and no isoline cache. ODA 20.4.41
+    /// still stores BL(0) silhouettes before the material tail.
     #[test]
     fn test_acds_solid_empty_silhouette_count_r2018() {
         use crate::io::dwg::dwg_reference_type::DwgReferenceType;
@@ -6547,44 +6488,63 @@ mod tests {
 
         let v = DwgVersion::AC24;
         let d = DxfVersion::AC1032;
-        for silhouettes in [None, Some(0)] {
-            let mut main = DwgBitWriter::new(v, d);
-            let mut handles = DwgBitWriter::new(v, d);
-            main.write_bit(true); // wireframe header
-            main.write_bit(true); // reference point
-            main.write_3bit_double(Vector3::new(1.0, 2.0, 3.0));
-            main.write_bit_long(4); // isolines
-            main.write_bit(false); // no isoline cache
-            if let Some(count) = silhouettes {
-                main.write_bit_long(count);
-            }
-            main.write_bit(true); // no extra modeler body
-            main.write_bit_long(1); // one material binding
-            main.write_bit_long(7);
-            main.write_bit_long(9);
-            handles.write_handle(DwgReferenceType::HardPointer, 0x1234);
-            main.write_bit(false); // revision: no guid
-            main.write_bit_long(1);
-            main.write_bit_short(2);
-            main.write_bit_short(3);
-            main.write_bytes(&[5; 8]);
-            main.write_bit_long(6);
-            let end = main.position_in_bits();
-            let mut r = DwgMergedReader::from_readers(
-                DwgBitReader::new(main.into_bytes(), v, d),
-                None,
-                Some(DwgBitReader::new(handles.into_bytes(), v, d)),
-                d,
-            );
-            r.set_main_data_end(end);
 
-            let result = read_acis_entity(&mut r, v, d, true);
-            r.check_error().unwrap();
-            assert_eq!(r.position_in_bits(), end, "silhouettes={silhouettes:?}");
-            assert_eq!(result.point, Vector3::new(1.0, 2.0, 3.0));
-            assert_eq!(result.materials.len(), 1);
-            assert_eq!(result.materials[0].array_index, 7);
-            assert_eq!(result.revision.end_marker, 6);
-        }
+        let mut main = DwgBitWriter::new(v, d);
+        let mut handles = DwgBitWriter::new(v, d);
+        main.write_bit(true); // wireframe header
+        main.write_bit(true); // reference point
+        main.write_3bit_double(Vector3::new(1.0, 2.0, 3.0));
+        main.write_bit_long(4); // isolines
+        main.write_bit(false); // no isoline cache
+        main.write_bit_long(0); // silhouette count
+        main.write_bit(true); // no extra modeler body
+        main.write_bit_long(1); // one material binding
+        main.write_bit_long(7);
+        main.write_bit_long(9);
+        handles.write_handle(DwgReferenceType::HardPointer, 0x1234);
+        main.write_bit(false); // revision: no guid
+        main.write_bit_long(1);
+        main.write_bit_short(2);
+        main.write_bit_short(3);
+        main.write_bytes(&[5; 8]);
+        main.write_bit_long(6);
+        let end = main.position_in_bits();
+        let mut r = DwgMergedReader::from_readers(
+            DwgBitReader::new(main.into_bytes(), v, d),
+            None,
+            Some(DwgBitReader::new(handles.into_bytes(), v, d)),
+            d,
+        );
+        r.set_main_data_end(end);
+
+        let result = read_acis_entity(&mut r, v, d, true);
+        r.check_error().unwrap();
+        assert_eq!(r.position_in_bits(), end);
+        assert_eq!(result.point, Vector3::new(1.0, 2.0, 3.0));
+        assert_eq!(result.materials.len(), 1);
+        assert_eq!(result.materials[0].array_index, 7);
+        assert_eq!(result.revision.end_marker, 6);
+
+        let mut missing = DwgBitWriter::new(v, d);
+        missing.write_bit(true);
+        missing.write_bit(true);
+        missing.write_3bit_double(Vector3::new(1.0, 2.0, 3.0));
+        missing.write_bit_long(4);
+        missing.write_bit(false);
+        missing.write_bit(true);
+        missing.write_bit_long(0);
+        let missing_end = missing.position_in_bits();
+        let mut missing_reader = DwgMergedReader::from_readers(
+            DwgBitReader::new(missing.into_bytes(), v, d),
+            None,
+            None,
+            d,
+        );
+        missing_reader.set_main_data_end(missing_end);
+        read_acis_entity(&mut missing_reader, v, d, true);
+        assert!(
+            missing_reader.check_error().is_err()
+                || missing_reader.position_in_bits() != missing_end
+        );
     }
 }

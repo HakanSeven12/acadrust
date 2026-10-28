@@ -2,6 +2,10 @@
 //!
 //! This module provides importers that convert common 3D interchange formats
 //! into acadrust entities.  Tessellated formats produce [`Mesh`] entities.
+//! The importers share one mesh assembler: vertices are welded on a tolerance
+//! grid, and a face that cites a missing vertex is dropped. glTF and COLLADA
+//! place each instance with its node transform. FBX applies each model's
+//! local translation, Euler XYZ rotation, and scale, then the parent models.
 //!
 //! # Quick start
 //!
@@ -26,10 +30,12 @@ pub mod collada;
 pub mod color_mapping;
 pub mod fbx;
 pub mod gltf;
+mod mesh;
 pub mod obj;
 pub mod stl;
 
-use std::path::Path;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use crate::document::CadDocument;
 use crate::error::{DxfError, Result};
@@ -132,5 +138,106 @@ pub fn import_file(path: impl AsRef<Path>, config: &ImportConfig) -> Result<CadD
         ImportFormat::Fbx => FbxImporter::from_file(path)?
             .with_config(config.clone())
             .import(),
+    }
+}
+
+pub(super) fn read_path_bytes(path: &Path) -> Result<Vec<u8>> {
+    let mut file = std::fs::File::open(path).map_err(|error| {
+        DxfError::ImportError(format!("Cannot open '{}': {}", path.display(), error))
+    })?;
+    read_reader_bytes(&mut file, &format!("'{}'", path.display()))
+}
+
+pub(super) fn read_reader_bytes<R: Read>(mut reader: R, label: &str) -> Result<Vec<u8>> {
+    let mut data = Vec::new();
+    reader
+        .read_to_end(&mut data)
+        .map_err(|error| DxfError::ImportError(format!("Cannot read {label}: {error}")))?;
+    Ok(data)
+}
+
+/// Joins `reference` onto `base_dir` when the reference stays inside that directory.
+pub(super) fn resolve_relative(base_dir: &Path, reference: &str) -> Result<PathBuf> {
+    if reference.is_empty() || reference.contains('\0') {
+        return Err(DxfError::ImportError(
+            "Import reference is empty".to_string(),
+        ));
+    }
+    let relative = Path::new(reference);
+    let escapes = relative.is_absolute()
+        || relative.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        });
+    if escapes {
+        return Err(DxfError::ImportError(format!(
+            "Import reference '{reference}' escapes the source directory"
+        )));
+    }
+    Ok(base_dir.join(relative))
+}
+
+/// Decodes a `%HH` URI path. `+` is left unchanged.
+pub(super) fn percent_decode(input: &str) -> Result<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return Err(DxfError::ImportError(format!(
+                    "Invalid percent-encoding in '{input}'"
+                )));
+            }
+            let high = from_hex(bytes[index + 1]).ok_or_else(|| {
+                DxfError::ImportError(format!("Invalid percent-encoding in '{input}'"))
+            })?;
+            let low = from_hex(bytes[index + 2]).ok_or_else(|| {
+                DxfError::ImportError(format!("Invalid percent-encoding in '{input}'"))
+            })?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded)
+        .map_err(|_| DxfError::ImportError(format!("Import reference '{input}' is not UTF-8")))
+}
+
+fn from_hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_parent_directory_references() {
+        let error = resolve_relative(Path::new("models"), "../secret.mtl").unwrap_err();
+        assert!(error.to_string().contains("escapes"));
+    }
+
+    #[test]
+    fn joins_a_sibling_reference() {
+        let path = resolve_relative(Path::new("models"), "wood.mtl").unwrap();
+        assert_eq!(path, Path::new("models").join("wood.mtl"));
+    }
+
+    #[test]
+    fn percent_decodes_a_space() {
+        assert_eq!(
+            percent_decode("buffer%20name.bin").unwrap(),
+            "buffer name.bin"
+        );
     }
 }

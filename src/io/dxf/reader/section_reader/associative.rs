@@ -1005,7 +1005,7 @@ fn read_array_item(cursor: &mut AssocCursor<'_>) -> AssocArrayItem {
 }
 
 fn read_dimension_association_dxf(record: &AssocDxfRecord) -> AssocDimensionAssociation {
-    // AutoCAD writes the dimension handle before the scalar DIMASSOC fields,
+    // ACAD writes the dimension handle before the scalar DIMASSOC fields,
     // while dwg2.spec lists it after them. Read it independently so both
     // orderings decode without advancing the positional reference cursor.
     let dimension = record.handle("AcDbDimAssoc", 330, 0);

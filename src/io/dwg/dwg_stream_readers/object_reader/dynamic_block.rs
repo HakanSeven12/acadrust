@@ -1038,15 +1038,13 @@ pub fn read_dynamic_block_data(
             }
             let column_count = safe_count(reader.read_bit_long(), reader);
             integer!(91, column_count);
-            for column in 0..column_count {
-                if column == 0 {
-                    fields.push(BlockPropertiesTableField {
-                        code: 340,
-                        value: BlockPropertiesTableValue::Handle(Handle::from(
-                            reader.read_handle(),
-                        )),
-                    });
-                }
+            for _column in 0..column_count {
+                // Each column stores two parameter handles: one before its
+                // metadata and one after. DXF group 340 keeps that order.
+                fields.push(BlockPropertiesTableField {
+                    code: 340,
+                    value: BlockPropertiesTableValue::Handle(Handle::from(reader.read_handle())),
+                });
                 for code in [170, 171] {
                     fields.push(BlockPropertiesTableField {
                         code,
@@ -1080,17 +1078,10 @@ pub fn read_dynamic_block_data(
                     code: 302,
                     value: BlockPropertiesTableValue::Text(reader.read_variable_text()),
                 });
-                // Each table column stores one parameter handle. The first
-                // column's handle is emitted before its per-column metadata
-                // above; subsequent columns emit their handle here.
-                if column != 0 {
-                    fields.push(BlockPropertiesTableField {
-                        code: 340,
-                        value: BlockPropertiesTableValue::Handle(Handle::from(
-                            reader.read_handle(),
-                        )),
-                    });
-                }
+                fields.push(BlockPropertiesTableField {
+                    code: 340,
+                    value: BlockPropertiesTableValue::Handle(Handle::from(reader.read_handle())),
+                });
             }
             let row_count = safe_count(reader.read_bit_long(), reader);
             integer!(92, row_count);
@@ -1122,11 +1113,10 @@ pub fn read_dynamic_block_data(
                     fields.push(BlockPropertiesTableField { code, value });
                 }
             }
-            let state_count = safe_count(reader.read_bit_long(), reader);
-            integer!(93, state_count);
-            for index in 0..state_count {
+            integer!(93, reader.read_bit_long());
+            for code in 290..=292 {
                 fields.push(BlockPropertiesTableField {
-                    code: 290 + index,
+                    code,
                     value: BlockPropertiesTableValue::Boolean(reader.read_bit()),
                 });
             }

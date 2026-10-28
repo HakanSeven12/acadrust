@@ -1,6 +1,6 @@
-//! Native AutoCAD layer-state storage.
+//! Native ACAD layer-state storage.
 //!
-//! AutoCAD keeps named layer states as XRecords in the
+//! ACAD keeps named layer states as XRecords in the
 //! `ACAD_LAYERSTATES` dictionary attached to the layer table's extension
 //! dictionary.  This module exposes that object graph as semantic Rust data
 //! and provides capture, restore, rename, and delete operations.
@@ -50,7 +50,7 @@ impl LayerStateMask {
             | Self::TRANSPARENCY.0,
     );
 
-    /// All standard AutoCAD layer-state properties.
+    /// All standard ACAD layer-state properties.
     pub const ALL: Self = Self(0x07ff);
 
     pub const fn from_bits(bits: u32) -> Self {
@@ -232,7 +232,7 @@ impl CadDocument {
         })
     }
 
-    /// Store a semantic layer state in the native AutoCAD dictionary/XRecord form.
+    /// Store a semantic layer state in the native ACAD dictionary/XRecord form.
     ///
     /// Existing states with the same name are updated in place.
     pub fn store_layer_state(&mut self, state: LayerState) -> Handle {

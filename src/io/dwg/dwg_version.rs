@@ -90,7 +90,7 @@ impl DwgVersion {
         *self == DwgVersion::AC9
     }
 
-    /// Whether this is the shared AutoCAD Release 11/12 format family.
+    /// Whether this is the shared ACAD Release 11/12 format family.
     pub fn r11_r12(&self) -> bool {
         *self == DwgVersion::AC9
     }

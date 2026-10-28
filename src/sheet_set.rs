@@ -1,4 +1,5 @@
 use crate::document::CadDocument;
+use crate::error::{DxfError, Result};
 use crate::fields::FieldContext;
 use crate::objects::{Dictionary, ObjectType, XRecord, XRecordValue};
 
@@ -266,15 +267,18 @@ impl Parser<'_> {
         }
     }
 
-    fn element(&mut self) -> Result<Element, String> {
+    fn element(&mut self) -> Result<Element> {
         self.skip_misc();
         if !self.s[self.i..].starts_with('<') {
-            return Err(format!("element expected at byte {}", self.i));
+            return Err(DxfError::InvalidFormat(format!(
+                "element expected at byte {}",
+                self.i
+            )));
         }
         self.i += 1;
         let name_end = self.s[self.i..]
             .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
-            .ok_or("unterminated tag")?;
+            .ok_or_else(|| DxfError::InvalidFormat("unterminated tag".into()))?;
         let mut el = Element::new(&self.s[self.i..self.i + name_end]);
         self.i += name_end;
         loop {
@@ -288,25 +292,38 @@ impl Parser<'_> {
                 self.i += 1;
                 break;
             }
-            let eq = rest.find('=').ok_or("attribute without value")?;
+            let eq = rest
+                .find('=')
+                .ok_or_else(|| DxfError::InvalidFormat("attribute without value".into()))?;
             let key = rest[..eq].trim().to_string();
             let after = rest[eq + 1..].trim_start();
-            let quote = after.chars().next().ok_or("attribute value expected")?;
+            let quote = after
+                .chars()
+                .next()
+                .ok_or_else(|| DxfError::InvalidFormat("attribute value expected".into()))?;
             if quote != '"' && quote != '\'' {
-                return Err("quoted attribute value expected".into());
+                return Err(DxfError::InvalidFormat(
+                    "quoted attribute value expected".into(),
+                ));
             }
-            let value_end = after[1..].find(quote).ok_or("unterminated attribute")?;
+            let value_end = after[1..]
+                .find(quote)
+                .ok_or_else(|| DxfError::InvalidFormat("unterminated attribute".into()))?;
             el.attrs.push((key, unescape(&after[1..1 + value_end])));
             self.i = self.s.len() - after.len() + value_end + 2;
         }
         loop {
             let rest = &self.s[self.i..];
-            let lt = rest.find('<').ok_or("unterminated element")?;
+            let lt = rest
+                .find('<')
+                .ok_or_else(|| DxfError::InvalidFormat("unterminated element".into()))?;
             el.text.push_str(&unescape(&rest[..lt]));
             self.i += lt;
             let rest = &self.s[self.i..];
             if rest.starts_with("</") {
-                let gt = rest.find('>').ok_or("unterminated end tag")?;
+                let gt = rest
+                    .find('>')
+                    .ok_or_else(|| DxfError::InvalidFormat("unterminated end tag".into()))?;
                 self.i += gt + 1;
                 // Indentation between child elements is not a value.
                 if !el.children.is_empty() && el.text.trim().is_empty() {
@@ -323,7 +340,7 @@ impl Parser<'_> {
     }
 }
 
-pub fn parse_xml(text: &str) -> Result<Element, String> {
+pub fn parse_xml(text: &str) -> Result<Element> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     Parser { s: text, i: 0 }.element()
 }
@@ -492,17 +509,21 @@ impl SheetSetDatabase {
         Self { root, path: None }
     }
 
-    pub fn from_xml(text: &str) -> Result<Self, String> {
+    pub fn from_xml(text: &str) -> Result<Self> {
         let root = parse_xml(text)?;
         if root.name != "AcSmDatabase" {
-            return Err(format!("not a sheet set database ({})", root.name));
+            return Err(DxfError::InvalidFormat(format!(
+                "not a sheet set database ({})",
+                root.name
+            )));
         }
         Ok(Self { root, path: None })
     }
 
-    pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let plain = decode(data);
-        let text = String::from_utf8(plain).map_err(|e| e.to_string())?;
+        let text =
+            String::from_utf8(plain).map_err(|error| DxfError::Encoding(error.to_string()))?;
         Self::from_xml(&text)
     }
 
@@ -515,15 +536,15 @@ impl SheetSetDatabase {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn read(path: &str) -> Result<Self, String> {
-        let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    pub fn read(path: &str) -> Result<Self> {
+        let data = std::fs::read(path)?;
         let mut db = Self::from_bytes(&data)?;
         db.path = Some(path.to_string());
         Ok(db)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn write(&mut self, path: &str) -> Result<(), String> {
+    pub fn write(&mut self, path: &str) -> Result<()> {
         // The publish options always carry the (empty) default output folder.
         if let Some(p) = self.sheet_set_mut().named_mut("PublishOptions") {
             if p.named("DefaultOutputdir").is_none() {
@@ -539,7 +560,7 @@ impl SheetSetDatabase {
         self.root.set_prop("DbFingerPrint", &new_id());
         self.root
             .set_prop_vt("FileRevision", 3, &revision.to_string());
-        std::fs::write(path, self.to_bytes()).map_err(|e| e.to_string())?;
+        std::fs::write(path, self.to_bytes())?;
         self.path = Some(path.to_string());
         Ok(())
     }

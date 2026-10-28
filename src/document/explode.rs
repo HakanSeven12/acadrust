@@ -338,7 +338,7 @@ impl CadDocument {
     /// Explode an INSERT using this document's block table and object graph.
     ///
     /// A MINSERT, xref, xref-dependent, or non-explodable definition is
-    /// refused just as AutoCAD's EXPLODE command is.  The returned entities
+    /// refused just as ACAD's EXPLODE command is.  The returned entities
     /// are detached from the source graph and have fresh handles suitable for
     /// insertion into this document.  The source INSERT and block contents
     /// are never modified.
@@ -398,7 +398,7 @@ impl CadDocument {
                 })
                 .count();
             if unsupported.len() == drawable_count {
-                // AutoCAD leaves an INSERT containing only unsupported
+                // ACAD leaves an INSERT containing only unsupported
                 // modeler members untouched under a non-uniform transform.
                 return Vec::new();
             }
@@ -448,7 +448,7 @@ impl CadDocument {
     /// Preserve an exact nested INSERT whose parent transform introduces
     /// shear.  The INSERT record cannot encode that affine map, so bake the
     /// nested block's transformed primitives into an anonymous `*E` block and
-    /// return an identity reference to it, matching AutoCAD's fallback.
+    /// return an identity reference to it, matching ACAD's fallback.
     fn make_shear_fallback(
         &mut self,
         parent: &Insert,

@@ -173,7 +173,7 @@ fn dimension_style_arrow(
     common: &EntityCommon,
     normal: Vector3,
 ) -> EntityType {
-    // AutoCAD's default closed arrow is one third of its length wide.
+    // ACAD's default closed arrow is one third of its length wide.
     arrow_solid(tip, toward, size, size / 6.0, common, normal)
 }
 
@@ -422,7 +422,7 @@ fn explode_hatch(hatch: &Hatch) -> Vec<EntityType> {
                     let (sa, ea) = if arc_edge.counter_clockwise {
                         (arc_edge.start_angle, arc_edge.end_angle)
                     } else {
-                        (arc_edge.end_angle, arc_edge.start_angle)
+                        (-arc_edge.end_angle, -arc_edge.start_angle)
                     };
                     result.push(EntityType::Arc(Arc {
                         common: inherit_common(common),
@@ -508,9 +508,9 @@ fn explode_hatch(hatch: &Hatch) -> Vec<EntityType> {
 }
 
 impl EntityType {
-    /// Explode this entity using AutoCAD's standalone-object rules.
+    /// Explode this entity using ACAD's standalone-object rules.
     ///
-    /// Primitive curves and faces that AutoCAD refuses to explode return an
+    /// Primitive curves and faces that ACAD refuses to explode return an
     /// empty vector. Legacy exporters can use flatten instead.
     pub fn explode(&self) -> Vec<EntityType> {
         match self {

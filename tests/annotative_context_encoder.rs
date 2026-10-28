@@ -162,7 +162,8 @@ fn encoder_preserves_context_fields_and_scale_link() {
 fn synth_roundtrip_leaf(
     class_name: &str,
     kind: ObjectContextKind,
-) -> (Handle, ObjectContextKind, i16, bool) {
+    has_file_to_extension_dictionary: bool,
+) -> (Handle, ObjectContextKind, i16, bool, bool) {
     let mut doc = CadDocument::with_version(DxfVersion::AC1032);
     doc.register_object_context_class(class_name);
 
@@ -179,6 +180,8 @@ fn synth_roundtrip_leaf(
         reactors: vec![owner_h],
         xdictionary_handle: None,
         class_version: 3,
+        has_file_to_extension_dictionary,
+        uses_legacy_mleader_context_base: false,
         is_default: true,
         scale: scale_h,
         kind,
@@ -205,7 +208,13 @@ fn synth_roundtrip_leaf(
         rt.context_scales.contains_key(&h),
         "leaf must be registered in context_scales"
     );
-    (h, c.kind, c.class_version, c.is_default)
+    (
+        h,
+        c.kind,
+        c.class_version,
+        c.has_file_to_extension_dictionary,
+        c.is_default,
+    )
 }
 
 #[test]
@@ -215,14 +224,29 @@ fn synth_blkref_context_roundtrips() {
         insertion: Vector3::new(123.5, -42.25, 7.0),
         scale_factor: Vector3::new(2.0, 3.0, 4.0),
     };
-    let (_h, got, cv, def) =
-        synth_roundtrip_leaf("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, cv, has_file_dictionary, def) =
+        synth_roundtrip_leaf("ACDB_BLKREFOBJECTCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(cv, 3);
+    assert!(has_file_dictionary);
     assert!(def);
     assert_eq!(
         got, kind,
         "BLKREF fields did not survive synthesis round-trip"
     );
+}
+
+#[test]
+fn r2010_context_file_dictionary_flag_is_not_on_the_wire() {
+    // AutoCAD does not store the ODA file-to-extension bit. A false value
+    // therefore comes back as the documented default.
+    let kind = ObjectContextKind::AnnotScale;
+    let (_h, got, _cv, has_file_dictionary, _def) = synth_roundtrip_leaf(
+        "ACDB_ANNOTSCALEOBJECTCONTEXTDATA_CLASS",
+        kind.clone(),
+        false,
+    );
+    assert_eq!(got, kind);
+    assert!(has_file_dictionary);
 }
 
 #[test]
@@ -233,8 +257,10 @@ fn synth_text_context_roundtrips() {
         insertion: Vector2::new(10.0, 20.0),
         alignment: Vector2::new(-3.0, 4.0),
     };
-    let (_h, got, cv, def) = synth_roundtrip_leaf("ACDB_TEXTOBJECTCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, cv, has_file_dictionary, def) =
+        synth_roundtrip_leaf("ACDB_TEXTOBJECTCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(cv, 3);
+    assert!(has_file_dictionary);
     assert!(def);
     assert_eq!(
         got, kind,
@@ -256,8 +282,8 @@ fn synth_mtext_context_roundtrips() {
         column_type: 0,
         columns: None,
     });
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_MTEXTOBJECTCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, _cv, _has_file_dictionary, _def) =
+        synth_roundtrip_leaf("ACDB_MTEXTOBJECTCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(
         got, kind,
         "MTEXT (no columns) fields did not survive round-trip"
@@ -285,8 +311,8 @@ fn synth_mtext_columns_roundtrips() {
             heights: vec![10.0, 20.0, 15.0],
         }),
     });
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_MTEXTOBJECTCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, _cv, _has_file_dictionary, _def) =
+        synth_roundtrip_leaf("ACDB_MTEXTOBJECTCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(
         got, kind,
         "MTEXT (columns) fields did not survive round-trip"
@@ -328,8 +354,8 @@ fn synth_hatch_view_context_roundtrips_inline_boundaries() {
         view_rotation: 0.75,
         evaluate_hatch: true,
     });
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_HATCHVIEWCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, _cv, _has_file_dictionary, _def) =
+        synth_roundtrip_leaf("ACDB_HATCHVIEWCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(got, kind, "hatch-view fields did not survive round-trip");
 }
 
@@ -358,8 +384,8 @@ fn synth_aligned_dim_context_roundtrips() {
     let kind = ObjectContextKind::Dim(dim_ctx(DimSubtype::Aligned {
         dimline_pt: Vector3::new(1.0, 2.0, 3.0),
     }));
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_ALDIMOBJECTCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, _cv, _has_file_dictionary, _def) =
+        synth_roundtrip_leaf("ACDB_ALDIMOBJECTCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(got, kind, "aligned-dim fields did not survive round-trip");
     // The dimension's block hard-pointer must survive too.
     if let ObjectContextKind::Dim(d) = &got {
@@ -374,7 +400,7 @@ fn synth_ordinate_dim_context_roundtrips() {
         feature_location_pt: Vector3::new(4.0, 5.0, 6.0),
         leader_endpt: Vector3::new(7.0, 8.0, 9.0),
     }));
-    let (_h, got, _cv, _def) =
-        synth_roundtrip_leaf("ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS", kind.clone());
+    let (_h, got, _cv, _has_file_dictionary, _def) =
+        synth_roundtrip_leaf("ACDB_ORDDIMOBJECTCONTEXTDATA_CLASS", kind.clone(), true);
     assert_eq!(got, kind, "ordinate-dim fields did not survive round-trip");
 }

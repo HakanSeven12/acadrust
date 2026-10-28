@@ -1,7 +1,9 @@
 //! glTF 2.0 importer.
 //!
 //! Supports `.gltf` (JSON + separate `.bin`) and `.glb` (binary container)
-//! files. Produces one [`Mesh`] entity per mesh primitive.
+//! files. Produces one [`Mesh`] entity per mesh primitive. When a scene is
+//! present, each node instance is placed with its world transform. Triangle
+//! strips and fans are triangulated; other primitive modes are skipped.
 //!
 //! # Example
 //!
@@ -13,7 +15,6 @@
 
 pub mod json_parser;
 
-use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,13 +22,12 @@ use std::path::{Path, PathBuf};
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::document::CadDocument;
-use crate::entities::mesh::{Mesh, MeshFace};
 use crate::entities::EntityType;
 use crate::error::{DxfError, Result};
-use crate::types::Vector3;
 
-use super::color_mapping::{create_material_layer, rgb_to_color};
-use super::ImportConfig;
+use super::color_mapping::{color_from_unit_rgb, create_material_layer};
+use super::mesh::{matrix_from_trs, mesh_from_indexed, transform_positions, IDENTITY};
+use super::{percent_decode, read_path_bytes, read_reader_bytes, resolve_relative, ImportConfig};
 
 use json_parser::JsonValue;
 
@@ -42,15 +42,8 @@ impl GltfImporter {
     /// Create an importer from a file path.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let mut file = fs::File::open(path).map_err(|e| {
-            DxfError::ImportError(format!("Cannot open '{}': {}", path.display(), e))
-        })?;
-        let mut data = Vec::new();
-        file.read_to_end(&mut data).map_err(|e| {
-            DxfError::ImportError(format!("Cannot read '{}': {}", path.display(), e))
-        })?;
         Ok(Self {
-            data,
+            data: read_path_bytes(path)?,
             base_dir: path.parent().map(|p| p.to_path_buf()),
             config: ImportConfig::default(),
         })
@@ -66,13 +59,9 @@ impl GltfImporter {
     }
 
     /// Create an importer from a reader.
-    pub fn from_reader<R: Read>(mut reader: R) -> Result<Self> {
-        let mut data = Vec::new();
-        reader
-            .read_to_end(&mut data)
-            .map_err(|e| DxfError::ImportError(format!("Cannot read glTF data: {}", e)))?;
+    pub fn from_reader<R: Read>(reader: R) -> Result<Self> {
         Ok(Self {
-            data,
+            data: read_reader_bytes(reader, "glTF data")?,
             base_dir: None,
             config: ImportConfig::default(),
         })
@@ -106,9 +95,9 @@ impl GltfImporter {
         }
 
         let mut cursor = std::io::Cursor::new(&self.data);
-        let _magic = cursor.read_u32::<LittleEndian>().unwrap();
-        let version = cursor.read_u32::<LittleEndian>().unwrap();
-        let _length = cursor.read_u32::<LittleEndian>().unwrap();
+        let _magic = read_glb_u32(&mut cursor)?;
+        let version = read_glb_u32(&mut cursor)?;
+        let _length = read_glb_u32(&mut cursor)?;
 
         if version != 2 {
             return Err(DxfError::ImportError(format!(
@@ -121,8 +110,8 @@ impl GltfImporter {
         let mut bin_data: Vec<Vec<u8>> = Vec::new();
 
         while (cursor.position() as usize) + 8 <= self.data.len() {
-            let chunk_length = cursor.read_u32::<LittleEndian>().unwrap() as usize;
-            let chunk_type = cursor.read_u32::<LittleEndian>().unwrap();
+            let chunk_length = read_glb_u32(&mut cursor)? as usize;
+            let chunk_type = read_glb_u32(&mut cursor)?;
             let pos = cursor.position() as usize;
 
             if pos + chunk_length > self.data.len() {
@@ -163,12 +152,13 @@ impl GltfImporter {
 
         if let Some(buffer_descs) = json.get("buffers").and_then(|v| v.as_array()) {
             for buf_desc in buffer_descs {
-                if let Some(uri) = buf_desc.get("uri").and_then(|v| v.as_str()) {
-                    if let Some(data) = self.resolve_uri(uri)? {
-                        buffers.push(data);
-                    }
-                }
-                // If no URI, it's the GLB embedded buffer (shouldn't happen in .gltf)
+                let uri = buf_desc
+                    .get("uri")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| {
+                        DxfError::ImportError("glTF buffer is missing a uri".to_string())
+                    })?;
+                buffers.push(self.resolve_uri(uri)?);
             }
         }
 
@@ -176,137 +166,340 @@ impl GltfImporter {
     }
 
     /// Resolve a buffer URI — supports `data:` base64 and file paths.
-    fn resolve_uri(&self, uri: &str) -> Result<Option<Vec<u8>>> {
-        if uri.starts_with("data:") {
-            // data URI: data:application/octet-stream;base64,AAAA...
-            if let Some(comma_pos) = uri.find(',') {
-                let encoded = &uri[comma_pos + 1..];
-                let decoded = base64_decode(encoded)?;
-                return Ok(Some(decoded));
-            }
-            return Ok(None);
+    fn resolve_uri(&self, uri: &str) -> Result<Vec<u8>> {
+        if let Some(data) = uri.strip_prefix("data:") {
+            let encoded = data.split_once(',').map(|(_, rest)| rest).ok_or_else(|| {
+                DxfError::ImportError("glTF data URI is missing a payload".to_string())
+            })?;
+            return base64_decode(encoded);
         }
 
-        // File path relative to .gltf
-        if let Some(base) = &self.base_dir {
-            let path = base.join(uri);
-            match fs::read(&path) {
-                Ok(data) => return Ok(Some(data)),
-                Err(e) => {
-                    return Err(DxfError::ImportError(format!(
-                        "Cannot read buffer '{}': {}",
-                        path.display(),
-                        e
-                    )));
-                }
-            }
-        }
-
-        Ok(None)
+        let base = self.base_dir.as_ref().ok_or_else(|| {
+            DxfError::ImportError(format!(
+                "glTF buffer '{uri}' needs a file directory to resolve"
+            ))
+        })?;
+        let decoded = percent_decode(uri)?;
+        let path = resolve_relative(base, &decoded)?;
+        fs::read(&path).map_err(|error| {
+            DxfError::ImportError(format!(
+                "Cannot read buffer '{}': {}",
+                path.display(),
+                error
+            ))
+        })
     }
 
     fn build_document(&self, json: &JsonValue, buffers: &[Vec<u8>]) -> Result<CadDocument> {
         let mut doc = CadDocument::new();
-        let scale = self.config.scale_factor;
-
-        let accessors = json.get("accessors").and_then(|v| v.as_array());
-        let buffer_views = json.get("bufferViews").and_then(|v| v.as_array());
-        let materials_arr = json.get("materials").and_then(|v| v.as_array());
-        let meshes = json.get("meshes").and_then(|v| v.as_array());
-
-        let meshes = match meshes {
-            Some(m) => m,
-            None => return Ok(doc), // No meshes
+        let meshes = json.get("meshes").and_then(|value| value.as_array());
+        let Some(meshes) = meshes else {
+            return Ok(doc);
         };
 
-        for gltf_mesh in meshes {
-            let mesh_name = gltf_mesh
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("mesh");
+        let tables = GltfTables {
+            accessors: json.get("accessors").and_then(|value| value.as_array()),
+            buffer_views: json.get("bufferViews").and_then(|value| value.as_array()),
+            materials: json.get("materials").and_then(|value| value.as_array()),
+            buffers,
+            config: &self.config,
+        };
 
-            let primitives = match gltf_mesh.get("primitives").and_then(|v| v.as_array()) {
-                Some(p) => p,
-                None => continue,
+        let instances = placed_meshes(json, meshes).unwrap_or_else(|| {
+            (0..meshes.len())
+                .map(|index| PlacedMesh {
+                    index,
+                    world: IDENTITY,
+                    name: mesh_name(&meshes[index]),
+                })
+                .collect()
+        });
+
+        for instance in instances {
+            let Some(gltf_mesh) = meshes.get(instance.index) else {
+                continue;
             };
-
-            for prim in primitives {
-                let attributes = match prim.get("attributes") {
-                    Some(a) => a,
-                    None => continue,
-                };
-
-                // Get POSITION accessor index
-                let pos_accessor_idx = match attributes.get("POSITION").and_then(|v| v.as_usize()) {
-                    Some(i) => i,
-                    None => continue,
-                };
-
-                // Read positions
-                let positions =
-                    read_accessor_vec3(pos_accessor_idx, accessors, buffer_views, buffers)?;
-
-                if positions.is_empty() {
-                    continue;
-                }
-
-                // Read indices (optional)
-                let indices = if let Some(idx) = prim.get("indices").and_then(|v| v.as_usize()) {
-                    read_accessor_scalar(idx, accessors, buffer_views, buffers)?
-                } else {
-                    // Non-indexed: sequential triangles
-                    (0..positions.len()).collect()
-                };
-
-                // Get material color
-                let (mat_name, color) =
-                    if let Some(mat_idx) = prim.get("material").and_then(|v| v.as_usize()) {
-                        get_material_color(mat_idx, materials_arr)
-                    } else {
-                        (String::new(), [0.8f32, 0.8, 0.8, 1.0])
-                    };
-
-                // Build mesh
-                let mesh = build_gltf_mesh(
-                    &positions,
-                    &indices,
-                    scale,
-                    self.config.merge_vertices,
-                    self.config.merge_tolerance,
-                );
-
-                if mesh.vertices.is_empty() {
-                    continue;
-                }
-
-                let layer_label = if mat_name.is_empty() {
-                    mesh_name.to_string()
-                } else {
-                    mat_name.clone()
-                };
-
-                let c = if mat_name.is_empty() {
-                    self.config.default_color
-                } else {
-                    rgb_to_color(
-                        (color[0] * 255.0) as u8,
-                        (color[1] * 255.0) as u8,
-                        (color[2] * 255.0) as u8,
-                        true,
-                    )
-                };
-
-                let layer =
-                    create_material_layer(&mut doc, &self.config.layer_prefix, &layer_label, c);
-
-                let mut mesh_entity = mesh;
-                mesh_entity.common.layer = layer;
-                mesh_entity.common.color = c;
-                doc.add_entity(EntityType::Mesh(mesh_entity))?;
-            }
+            append_gltf_mesh(&mut doc, gltf_mesh, &instance, &tables)?;
         }
 
         Ok(doc)
+    }
+}
+
+struct GltfTables<'a> {
+    accessors: Option<&'a [JsonValue]>,
+    buffer_views: Option<&'a [JsonValue]>,
+    materials: Option<&'a [JsonValue]>,
+    buffers: &'a [Vec<u8>],
+    config: &'a ImportConfig,
+}
+
+struct PlacedMesh {
+    index: usize,
+    world: [f64; 16],
+    name: String,
+}
+
+fn append_gltf_mesh(
+    doc: &mut CadDocument,
+    gltf_mesh: &JsonValue,
+    instance: &PlacedMesh,
+    tables: &GltfTables<'_>,
+) -> Result<()> {
+    let primitives = match gltf_mesh
+        .get("primitives")
+        .and_then(|value| value.as_array())
+    {
+        Some(primitives) => primitives,
+        None => return Ok(()),
+    };
+
+    for primitive in primitives {
+        let Some(attributes) = primitive.get("attributes") else {
+            continue;
+        };
+        let Some(position_accessor) = attributes
+            .get("POSITION")
+            .and_then(|value| value.as_usize())
+        else {
+            continue;
+        };
+        let positions = read_accessor_vec3(
+            position_accessor,
+            tables.accessors,
+            tables.buffer_views,
+            tables.buffers,
+        )?;
+        if positions.is_empty() {
+            continue;
+        }
+
+        let indices =
+            if let Some(index) = primitive.get("indices").and_then(|value| value.as_usize()) {
+                read_accessor_scalar(index, tables.accessors, tables.buffer_views, tables.buffers)?
+            } else {
+                (0..positions.len()).collect()
+            };
+        let mode = primitive
+            .get("mode")
+            .and_then(|value| value.as_usize())
+            .unwrap_or(4);
+        let triangles = triangle_indices(&indices, mode);
+        if triangles.is_empty() {
+            continue;
+        }
+
+        let (material_name, color) = if let Some(material_index) =
+            primitive.get("material").and_then(|value| value.as_usize())
+        {
+            get_material_color(material_index, tables.materials)
+        } else {
+            (String::new(), [0.8f32, 0.8, 0.8, 1.0])
+        };
+
+        let transformed = transform_positions_f32(&positions, &instance.world);
+        let mesh = mesh_from_indexed(
+            &transformed,
+            &triangles,
+            tables.config.scale_factor,
+            tables.config.merge_vertices,
+            tables.config.merge_tolerance,
+        );
+        if mesh.faces.is_empty() {
+            continue;
+        }
+
+        let layer_label = if material_name.is_empty() {
+            instance.name.clone()
+        } else {
+            material_name.clone()
+        };
+        let color = if material_name.is_empty() {
+            tables.config.default_color
+        } else {
+            color_from_unit_rgb(color[0], color[1], color[2])
+        };
+        let layer = create_material_layer(doc, &tables.config.layer_prefix, &layer_label, color);
+        let mut mesh_entity = mesh;
+        mesh_entity.common.layer = layer;
+        mesh_entity.common.color = color;
+        doc.add_entity(EntityType::Mesh(mesh_entity))?;
+    }
+    Ok(())
+}
+
+/// `None` when the file has no scene to walk. An empty scene is `Some` and
+/// imports nothing, rather than every mesh in the library.
+fn placed_meshes(json: &JsonValue, meshes: &[JsonValue]) -> Option<Vec<PlacedMesh>> {
+    let nodes = json.get("nodes")?.as_array()?;
+    if nodes.is_empty() {
+        return None;
+    }
+    let scenes = json.get("scenes")?.as_array()?;
+    if scenes.is_empty() {
+        return None;
+    }
+    let scene_index = json
+        .get("scene")
+        .and_then(|value| value.as_usize())
+        .unwrap_or(0);
+    let scene = scenes.get(scene_index).or_else(|| scenes.first())?;
+    let mut placed = Vec::new();
+    let mut path = Vec::new();
+    if let Some(roots) = scene.get("nodes").and_then(|value| value.as_array()) {
+        for root in roots {
+            if let Some(index) = root.as_usize() {
+                collect_placed(index, &IDENTITY, nodes, meshes, &mut path, &mut placed);
+            }
+        }
+    }
+    Some(placed)
+}
+
+fn collect_placed(
+    index: usize,
+    parent: &[f64; 16],
+    nodes: &[JsonValue],
+    meshes: &[JsonValue],
+    path: &mut Vec<usize>,
+    placed: &mut Vec<PlacedMesh>,
+) {
+    if path.len() >= 128 || path.contains(&index) || index >= nodes.len() {
+        return;
+    }
+    path.push(index);
+    let node = &nodes[index];
+    let world = super::mesh::mul_matrix(parent, &gltf_node_matrix(node));
+    if let Some(mesh_index) = node.get("mesh").and_then(|value| value.as_usize()) {
+        if mesh_index < meshes.len() {
+            placed.push(PlacedMesh {
+                index: mesh_index,
+                world,
+                name: placed_name(node, mesh_index, meshes),
+            });
+        }
+    }
+    if let Some(children) = node.get("children").and_then(|value| value.as_array()) {
+        for child in children {
+            if let Some(child_index) = child.as_usize() {
+                collect_placed(child_index, &world, nodes, meshes, path, placed);
+            }
+        }
+    }
+    path.pop();
+}
+
+fn gltf_node_matrix(node: &JsonValue) -> [f64; 16] {
+    if let Some(values) = node.get("matrix").and_then(|value| value.as_array()) {
+        if values.len() >= 16 {
+            let mut matrix = [0.0; 16];
+            for (slot, value) in matrix.iter_mut().zip(values.iter()) {
+                *slot = value.as_f64().unwrap_or(0.0);
+            }
+            return matrix;
+        }
+    }
+    let translation = json_vec3(node.get("translation"), [0.0; 3]);
+    let rotation = json_vec4(node.get("rotation"), [0.0, 0.0, 0.0, 1.0]);
+    let scale = json_vec3(node.get("scale"), [1.0, 1.0, 1.0]);
+    matrix_from_trs(translation, rotation, scale)
+}
+
+fn json_vec3(value: Option<&JsonValue>, default: [f64; 3]) -> [f64; 3] {
+    let Some(array) = value.and_then(|value| value.as_array()) else {
+        return default;
+    };
+    if array.len() < 3 {
+        return default;
+    }
+    [
+        array[0].as_f64().unwrap_or(default[0]),
+        array[1].as_f64().unwrap_or(default[1]),
+        array[2].as_f64().unwrap_or(default[2]),
+    ]
+}
+
+fn json_vec4(value: Option<&JsonValue>, default: [f64; 4]) -> [f64; 4] {
+    let Some(array) = value.and_then(|value| value.as_array()) else {
+        return default;
+    };
+    if array.len() < 4 {
+        return default;
+    }
+    [
+        array[0].as_f64().unwrap_or(default[0]),
+        array[1].as_f64().unwrap_or(default[1]),
+        array[2].as_f64().unwrap_or(default[2]),
+        array[3].as_f64().unwrap_or(default[3]),
+    ]
+}
+
+fn mesh_name(mesh: &JsonValue) -> String {
+    mesh.get("name")
+        .and_then(|value| value.as_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("mesh")
+        .to_string()
+}
+
+fn placed_name(node: &JsonValue, mesh_index: usize, meshes: &[JsonValue]) -> String {
+    if let Some(name) = node.get("name").and_then(|value| value.as_str()) {
+        if !name.is_empty() {
+            return name.to_string();
+        }
+    }
+    meshes
+        .get(mesh_index)
+        .map(mesh_name)
+        .unwrap_or_else(|| "mesh".to_string())
+}
+
+fn transform_positions_f32(positions: &[[f32; 3]], world: &[f64; 16]) -> Vec<[f64; 3]> {
+    let widened: Vec<[f64; 3]> = positions
+        .iter()
+        .map(|position| [position[0] as f64, position[1] as f64, position[2] as f64])
+        .collect();
+    if super::mesh::is_identity(world) {
+        widened
+    } else {
+        transform_positions(&widened, world)
+    }
+}
+
+/// glTF primitive modes: 4 triangles, 5 triangle strip, 6 triangle fan.
+fn triangle_indices(indices: &[usize], mode: usize) -> Vec<[usize; 3]> {
+    match mode {
+        5 => {
+            let mut triangles = Vec::new();
+            if indices.len() >= 3 {
+                for offset in 0..indices.len() - 2 {
+                    let (a, b, c) = (indices[offset], indices[offset + 1], indices[offset + 2]);
+                    if a == b || b == c || a == c {
+                        continue;
+                    }
+                    if offset % 2 == 0 {
+                        triangles.push([a, b, c]);
+                    } else {
+                        triangles.push([b, a, c]);
+                    }
+                }
+            }
+            triangles
+        }
+        6 => {
+            let mut triangles = Vec::new();
+            if indices.len() >= 3 {
+                for offset in 1..indices.len() - 1 {
+                    triangles.push([indices[0], indices[offset], indices[offset + 1]]);
+                }
+            }
+            triangles
+        }
+        4 => indices
+            .chunks_exact(3)
+            .map(|tri| [tri[0], tri[1], tri[2]])
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -533,88 +726,10 @@ fn get_material_color(mat_idx: usize, materials: Option<&[JsonValue]>) -> (Strin
     (name, color)
 }
 
-/// Build a Mesh from glTF positions and triangle indices.
-fn build_gltf_mesh(
-    positions: &[[f32; 3]],
-    indices: &[usize],
-    scale: f64,
-    merge: bool,
-    tolerance: f64,
-) -> Mesh {
-    let num_tris = indices.len() / 3;
-    if num_tris == 0 {
-        return Mesh::new();
-    }
-
-    if merge {
-        let inv_tol = if tolerance > 0.0 {
-            1.0 / tolerance
-        } else {
-            1e9
-        };
-        let mut mesh_verts: Vec<Vector3> = Vec::new();
-        let mut vert_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
-        let mut faces = Vec::with_capacity(num_tris);
-
-        let mut get_or_insert = |p: [f32; 3]| -> usize {
-            let x = p[0] as f64 * scale;
-            let y = p[1] as f64 * scale;
-            let z = p[2] as f64 * scale;
-            let key = (
-                (x * inv_tol).round() as i64,
-                (y * inv_tol).round() as i64,
-                (z * inv_tol).round() as i64,
-            );
-            if let Some(&idx) = vert_map.get(&key) {
-                idx
-            } else {
-                let idx = mesh_verts.len();
-                mesh_verts.push(Vector3::new(x, y, z));
-                vert_map.insert(key, idx);
-                idx
-            }
-        };
-
-        for tri in indices.chunks_exact(3) {
-            let p0 = positions.get(tri[0]).copied().unwrap_or([0.0; 3]);
-            let p1 = positions.get(tri[1]).copied().unwrap_or([0.0; 3]);
-            let p2 = positions.get(tri[2]).copied().unwrap_or([0.0; 3]);
-            let i0 = get_or_insert(p0);
-            let i1 = get_or_insert(p1);
-            let i2 = get_or_insert(p2);
-            if i0 != i1 && i1 != i2 && i0 != i2 {
-                faces.push(MeshFace::triangle(i0, i1, i2));
-            }
-        }
-
-        let mut mesh = Mesh::new();
-        mesh.vertices = mesh_verts;
-        mesh.faces = faces;
-        mesh.compute_edges();
-        mesh
-    } else {
-        let mut verts = Vec::with_capacity(num_tris * 3);
-        let mut faces = Vec::with_capacity(num_tris);
-
-        for tri in indices.chunks_exact(3) {
-            let base = verts.len();
-            for &idx in tri {
-                let p = positions.get(idx).copied().unwrap_or([0.0; 3]);
-                verts.push(Vector3::new(
-                    p[0] as f64 * scale,
-                    p[1] as f64 * scale,
-                    p[2] as f64 * scale,
-                ));
-            }
-            faces.push(MeshFace::triangle(base, base + 1, base + 2));
-        }
-
-        let mut mesh = Mesh::new();
-        mesh.vertices = verts;
-        mesh.faces = faces;
-        mesh.compute_edges();
-        mesh
-    }
+fn read_glb_u32(cursor: &mut impl Read) -> Result<u32> {
+    cursor
+        .read_u32::<LittleEndian>()
+        .map_err(|error| DxfError::ImportError(format!("truncated GLB container: {error}")))
 }
 
 /// Simple base64 decoder (standard alphabet, no padding required).
@@ -734,6 +849,62 @@ mod tests {
         } else {
             panic!("Expected Mesh");
         }
+    }
+
+    #[test]
+    fn node_translation_moves_the_triangle() {
+        let positions: [f32; 9] = [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let indices: [u16; 3] = [0, 1, 2];
+        let mut buf = Vec::new();
+        for position in &positions {
+            buf.extend_from_slice(&position.to_le_bytes());
+        }
+        for index in &indices {
+            buf.extend_from_slice(&index.to_le_bytes());
+        }
+        while buf.len() % 4 != 0 {
+            buf.push(0);
+        }
+        let uri = format!(
+            "data:application/octet-stream;base64,{}",
+            base64_encode(&buf)
+        );
+        let json = format!(
+            r#"{{
+  "asset": {{"version": "2.0"}},
+  "buffers": [{{"uri": "{uri}", "byteLength": {}}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteOffset": 0, "byteLength": 36}},
+    {{"buffer": 0, "byteOffset": 36, "byteLength": 6}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"}},
+    {{"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}}
+  ],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0}}, "indices": 1}}]}}],
+  "nodes": [{{"mesh": 0, "translation": [10, 0, 0]}}],
+  "scenes": [{{"nodes": [0]}}],
+  "scene": 0
+}}"#,
+            buf.len()
+        );
+        let doc = GltfImporter::from_bytes(json.into_bytes())
+            .import()
+            .unwrap();
+        let entities: Vec<_> = doc.entities().collect();
+        let EntityType::Mesh(mesh) = &entities[0] else {
+            panic!("Expected Mesh");
+        };
+        assert!(mesh
+            .vertices
+            .iter()
+            .any(|vertex| (vertex.x - 10.0).abs() < 1e-5 && vertex.y == 0.0));
+    }
+
+    #[test]
+    fn triangle_strip_alternates_winding() {
+        let triangles = triangle_indices(&[0, 1, 2, 3], 5);
+        assert_eq!(triangles, vec![[0, 1, 2], [2, 1, 3]]);
     }
 
     /// Simple base64 encoder for tests.

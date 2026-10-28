@@ -244,7 +244,7 @@ fn negative_graphic_lengths_are_rejected_and_lengths_that_fit_are_read() {
         } else {
             assert!(graphic.is_empty(), "{version:?}");
             let error = reader.check_error().unwrap_err().to_string();
-            assert!(error.contains("Invalid DWG count -1"), "{error}");
+            assert!(error.contains("Invalid DWG array count -1"), "{error}");
         }
     }
 }

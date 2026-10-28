@@ -29,9 +29,9 @@ pub(crate) use text::*;
 /// Text and hatch policies for MIRROR and MIRROR3D.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct MirrorOptions {
-    /// AutoCAD MIRRTEXT: false keeps text readable; true reflects glyphs.
+    /// ACAD MIRRTEXT: false keeps text readable; true reflects glyphs.
     pub mirror_text: bool,
-    /// AutoCAD MIRRHATCH: false preserves pattern direction; true reflects it.
+    /// ACAD MIRRHATCH: false preserves pattern direction; true reflects it.
     pub mirror_hatch: bool,
     /// Exact text advance width, including height and width factor.
     /// Aligned/Fit text uses its alignment points. Other text uses an estimate

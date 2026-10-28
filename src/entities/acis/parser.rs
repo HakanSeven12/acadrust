@@ -25,7 +25,7 @@ impl SatParser {
         let header = Self::parse_header_line(header_line)?;
 
         // The product-id and tolerance header lines only exist from ACIS 2.0
-        // on. Pre-2.0 SAT (e.g. AutoCAD R14's ACIS 1.6, version 106) writes
+        // on. Pre-2.0 SAT (e.g. ACAD R14's ACIS 1.6, version 106) writes
         // the version line then jumps straight to the records — consuming two
         // phantom header lines there ate the `body` and `lump` records, so
         // every pointer resolved two records off and the solid never meshed.

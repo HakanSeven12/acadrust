@@ -25,7 +25,7 @@ use crate::xdata::{ExtendedData, ExtendedDataRecord, XDataValue};
 /// values. In the [`Matrix4`] (column-vector) convention that is one
 /// matrix row per group of four, translation last:
 /// `[m00, m01, m02, Tx, m10, m11, m12, Ty, m20, m21, m22, Tz]`.
-/// AutoCAD writes an XCLIP of an insert at (5, 5) as
+/// ACAD writes an XCLIP of an insert at (5, 5) as
 /// `[1, 0, 0, -5, 0, 1, 0, -5, 0, 0, 1, 0]`; reading it as four columns of
 /// three turns `y` into a constant and collapses the boundary to a line.
 fn matrix_from_dxf_4x3(v: &[f64]) -> Matrix4 {
@@ -854,14 +854,25 @@ fn class_dxf_hatch_context_boundary(
                 end_angle: fields.f64(section, 51).to_radians(),
                 counter_clockwise: fields.bool(section, 73),
             })),
-            3 => path.add_edge(BoundaryEdge::EllipticArc(EllipticArcEdge {
-                center: fields.point2(section, 10),
-                major_axis_endpoint: fields.point2(section, 11),
-                minor_axis_ratio: fields.f64(section, 40),
-                start_angle: fields.f64(section, 50),
-                end_angle: fields.f64(section, 51),
-                counter_clockwise: fields.bool(section, 73),
-            })),
+            3 => {
+                let minor_axis_ratio = fields.f64(section, 40);
+                // Groups 50/51 are circular angles in degrees, same as a HATCH
+                // edge. The model stores the ellipse parameter.
+                path.add_edge(BoundaryEdge::EllipticArc(EllipticArcEdge {
+                    center: fields.point2(section, 10),
+                    major_axis_endpoint: fields.point2(section, 11),
+                    minor_axis_ratio,
+                    start_angle: circular_angle_to_ellipse_param(
+                        minor_axis_ratio,
+                        fields.f64(section, 50).to_radians(),
+                    ),
+                    end_angle: circular_angle_to_ellipse_param(
+                        minor_axis_ratio,
+                        fields.f64(section, 51).to_radians(),
+                    ),
+                    counter_clockwise: fields.bool(section, 73),
+                }))
+            }
             4 => {
                 let degree = fields.i32(section, 94);
                 let rational = fields.bool(section, 73);
@@ -1038,7 +1049,7 @@ impl DynamicDxfFields {
             .unwrap_or(Handle::NULL)
     }
 
-    /// Vector stored as 140/141/142 (AutoCAD) or 140/150/160 (older acadrust output).
+    /// Vector stored as 140/141/142 (ACAD) or 140/150/160 (older acadrust output).
     fn vector_140(&self, section: &str) -> Vector3 {
         let pick = |a: i32, b: i32| {
             if self.values(section, a).is_empty() {
@@ -1076,12 +1087,12 @@ impl DynamicDxfFields {
                     GroupCodeValueType::Byte
                     | GroupCodeValueType::Int16
                     | GroupCodeValueType::Int32
-                    | GroupCodeValueType::Int64 => BlockPropertiesTableValue::Integer(
-                        value.trim().parse::<i64>().unwrap_or(0),
-                    ),
-                    GroupCodeValueType::Double => BlockPropertiesTableValue::Real(
-                        value.trim().parse::<f64>().unwrap_or(0.0),
-                    ),
+                    | GroupCodeValueType::Int64 => {
+                        BlockPropertiesTableValue::Integer(value.trim().parse::<i64>().unwrap_or(0))
+                    }
+                    GroupCodeValueType::Double => {
+                        BlockPropertiesTableValue::Real(value.trim().parse::<f64>().unwrap_or(0.0))
+                    }
                     GroupCodeValueType::Handle => {
                         BlockPropertiesTableValue::Handle(parse_dxf_handle(value))
                     }
@@ -1092,9 +1103,7 @@ impl DynamicDxfFields {
                     }
                     GroupCodeValueType::None
                     | GroupCodeValueType::String
-                    | GroupCodeValueType::Point3D => {
-                        BlockPropertiesTableValue::Text(value.clone())
-                    }
+                    | GroupCodeValueType::Point3D => BlockPropertiesTableValue::Text(value.clone()),
                 };
                 BlockPropertiesTableField {
                     code: *code,
@@ -1114,7 +1123,7 @@ fn dynamic_dxf_eval(fields: &DynamicDxfFields) -> BlockEvalExpression {
         // No 70 group means "no value" (-9999).
         .unwrap_or(-9999);
     let value = match value_code {
-        // AutoCAD writes a real value as 140; older acadrust output used 40.
+        // ACAD writes a real value as 140; older acadrust output used 40.
         40 if !fields.values(section, 140).is_empty() => {
             BlockEvalValue::Real(fields.f64(section, 140))
         }
@@ -1601,6 +1610,7 @@ impl<'a> SectionReader<'a> {
         // A $CUSTOMPROPERTYTAG waits for its $CUSTOMPROPERTY value.
         let mut custom_value_pending = false;
         let mut code_page_seen = false;
+        let mut dimatfit_seen = false;
 
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 && pair.value_string == "ENDSEC" {
@@ -1645,7 +1655,10 @@ impl<'a> SectionReader<'a> {
                             "$VIEWMODE" => state.view_mode = value,
                             "$FLATLAND" => state.flatland = value,
                             "$UCSICON" => state.ucs_icon = value,
-                            "$UNITMODE" => state.unit_mode = value,
+                            "$UNITMODE" => {
+                                state.unit_mode = value;
+                                hdr.unit_mode = value;
+                            }
                             _ => unreachable!(),
                         }
                     }
@@ -1679,7 +1692,9 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 "$ACADMAINTVER" => {
-                    self.reader.read_pair()?;
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_int()) {
+                        hdr.acad_maintenance_version = v as i32;
+                    }
                 }
                 "$REQUIREDVERSIONS" => {
                     if let Some(p) = self.reader.read_pair()? {
@@ -3034,11 +3049,25 @@ impl<'a> SectionReader<'a> {
                         }
                     }
                 }
-                "$DIMATFIT" | "$DIMFIT" => {
-                    if let Some(p) = self.reader.read_pair()? {
-                        if let Some(v) = p.as_i16() {
+                "$DIMATFIT" => {
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_i16()) {
+                        hdr.dim_fit = v;
+                        dimatfit_seen = true;
+                    }
+                }
+                // R13/R14 files only have $DIMFIT, so it feeds dim_fit until a
+                // $DIMATFIT says otherwise.
+                "$DIMFIT" => {
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_i16()) {
+                        hdr.dim_fit_r13 = v;
+                        if !dimatfit_seen {
                             hdr.dim_fit = v;
                         }
+                    }
+                }
+                "$DIMUNIT" => {
+                    if let Some(v) = self.reader.read_pair()?.and_then(|p| p.as_i16()) {
+                        hdr.dim_unit = v;
                     }
                 }
                 "$DIMUPT" => {
@@ -3054,6 +3083,32 @@ impl<'a> SectionReader<'a> {
                 "$DIMAPOST" => {
                     if let Some(p) = self.reader.read_pair()? {
                         hdr.dim_alt_post = p.value_string.clone();
+                    }
+                }
+                "$DIMTXSTY" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_text_style_name = p.value_string.clone();
+                        // A DXF header names the style; the handle is only a
+                        // DWG concept, so the writer resolves it from the name.
+                        hdr.dim_text_style_handle = Handle::NULL;
+                    }
+                }
+                "$DIMLTYPE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype_name = p.value_string.clone();
+                        hdr.dim_linetype_handle = Handle::NULL;
+                    }
+                }
+                "$DIMLTEX1" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype1_name = p.value_string.clone();
+                        hdr.dim_linetype1_handle = Handle::NULL;
+                    }
+                }
+                "$DIMLTEX2" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_linetype2_name = p.value_string.clone();
+                        hdr.dim_linetype2_handle = Handle::NULL;
                     }
                 }
                 "$DIMBLK" => {
@@ -3193,6 +3248,93 @@ impl<'a> SectionReader<'a> {
                 }
                 "$PUCSYDIR" => {
                     self.read_header_point3(&mut hdr.paper_space_ucs_y_axis)?;
+                }
+                "$UCSORGTOP" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[0])?;
+                }
+                "$PUCSORGTOP" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[0])?;
+                }
+                "$UCSORGBOTTOM" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[1])?;
+                }
+                "$PUCSORGBOTTOM" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[1])?;
+                }
+                "$UCSORGLEFT" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[2])?;
+                }
+                "$PUCSORGLEFT" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[2])?;
+                }
+                "$UCSORGRIGHT" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[3])?;
+                }
+                "$PUCSORGRIGHT" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[3])?;
+                }
+                "$UCSORGFRONT" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[4])?;
+                }
+                "$PUCSORGFRONT" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[4])?;
+                }
+                "$UCSORGBACK" => {
+                    self.read_header_point3(&mut hdr.ucs_ortho_origins[5])?;
+                }
+                "$PUCSORGBACK" => {
+                    self.read_header_point3(&mut hdr.paper_ucs_ortho_origins[5])?;
+                }
+                "$PELLIPSE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        // An int in some versions of AutoCAD, a bool in others.
+                        if let Some(v) = p.as_i16() {
+                            hdr.create_ellipse_as_polyline = v != 0;
+                        }
+                    }
+                }
+                "$PUCSBASE" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.paper_ucs_base = p.value_string.clone();
+                    }
+                }
+                "$DIMTXTDIRECTION" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_i16() {
+                            hdr.dim_text_direction = v != 0;
+                        }
+                    }
+                }
+                "$DIMALTMZF" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_double() {
+                            hdr.dim_alt_mzf = v;
+                        }
+                    }
+                }
+                "$DIMALTMZS" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_alt_mzs = p.value_string.clone();
+                    }
+                }
+                "$DIMMZF" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_double() {
+                            hdr.dim_mzf = v;
+                        }
+                    }
+                }
+                "$DIMMZS" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        hdr.dim_mzs = p.value_string.clone();
+                    }
+                }
+                "$CSHADOW" => {
+                    if let Some(p) = self.reader.read_pair()? {
+                        if let Some(v) = p.as_i16() {
+                            hdr.cast_shadow = v;
+                        }
+                    }
                 }
                 "$UCSORTHOVIEW" => {
                     if let Some(p) = self.reader.read_pair()? {
@@ -3849,9 +3991,7 @@ impl<'a> SectionReader<'a> {
                         self.skip_entity()?;
                     }
                     _ => {
-                        // Read as unknown entity in block — common fields preserved
-                        let entity = self.read_unknown_entity(&pair.value_string)?;
-                        block_entities.push(EntityType::Unknown(entity));
+                        block_entities.push(self.read_custom_entity(&pair.value_string)?);
                     }
                 }
             }
@@ -4181,16 +4321,16 @@ impl<'a> SectionReader<'a> {
                             self.skip_entity()?;
                         }
                         _ => {
-                            // Read as unknown entity — common fields preserved, entity-specific codes discarded
-                            document.notifications.notify(
-                                crate::notification::NotificationType::NotImplemented,
-                                format!(
-                                    "Entity not supported, read as UnknownEntity: {}",
-                                    entity_type
-                                ),
-                            );
-                            let entity = self.read_unknown_entity(&entity_type)?;
-                            let _ = document.add_entity(EntityType::Unknown(entity));
+                            if !crate::classes::arch::is_architecture_name(&entity_type) {
+                                document.notifications.notify(
+                                    crate::notification::NotificationType::NotImplemented,
+                                    format!(
+                                        "Entity not supported, read as UnknownEntity: {}",
+                                        entity_type
+                                    ),
+                                );
+                            }
+                            let _ = document.add_entity(self.read_custom_entity(&entity_type)?);
                         }
                     }
                     Ok(())
@@ -4605,12 +4745,10 @@ impl<'a> SectionReader<'a> {
             "BLOCKROTATIONGRIP" => DynamicBlockData::RotationGrip(dynamic_dxf_grip(&fields)),
             "BLOCKVISIBILITYGRIP" => DynamicBlockData::VisibilityGrip(dynamic_dxf_grip(&fields)),
             "BLOCKXYGRIP" => DynamicBlockData::XYGrip(dynamic_dxf_grip(&fields)),
-            "BLOCKPROPERTIESTABLE" => {
-                DynamicBlockData::PropertiesTable(BlockPropertiesTable {
-                    parameter: dynamic_dxf_one_point(&fields),
-                    fields: fields.properties_table_fields("AcDbBlockPropertiesTable"),
-                })
-            }
+            "BLOCKPROPERTIESTABLE" => DynamicBlockData::PropertiesTable(BlockPropertiesTable {
+                parameter: dynamic_dxf_one_point(&fields),
+                fields: fields.properties_table_fields("AcDbBlockPropertiesTable"),
+            }),
             "BLOCKPROPERTIESTABLEGRIP" => {
                 DynamicBlockData::PropertiesTableGrip(dynamic_dxf_grip(&fields))
             }
@@ -5260,7 +5398,7 @@ impl<'a> SectionReader<'a> {
                 }
             }
             "ACDB_MTEXTOBJECTCONTEXTDATA_CLASS" => {
-                // AutoCAD: no subclass marker, fields follow the annotation
+                // ACAD: no subclass marker, fields follow the annotation
                 // scale groups, 10 = x-axis direction, 11 = insertion point.
                 // Older acadrust output: an AcDbMTextObjectContextData marker
                 // with the two points the other way round.
@@ -5438,6 +5576,7 @@ impl<'a> SectionReader<'a> {
                         xdictionary_handle: None,
                         has_binary_data: false,
                         class_version: context_class_version,
+                        has_file_to_extension_dictionary: true,
                         is_default: context_is_default,
                         scale: context_scale,
                         mtext: MTextContext {
@@ -5512,6 +5651,10 @@ impl<'a> SectionReader<'a> {
             reactors,
             xdictionary_handle,
             class_version,
+            // DXF does not expose the R2010+ DWG file-to-extension flag.
+            // ODA §20.4.89 documents true as its default.
+            has_file_to_extension_dictionary: true,
+            uses_legacy_mleader_context_base: false,
             is_default,
             scale,
             kind,
@@ -6889,7 +7032,7 @@ impl<'a> SectionReader<'a> {
                                 .objects
                                 .insert(obj.handle, ObjectType::DataObject(obj));
                         }
-                        // AutoCAD emits the record name with an underscore; accept
+                        // ACAD emits the record name with an underscore; accept
                         // both spellings so the INSERT xclip chain resolves.
                         "SPATIAL_FILTER" | "SPATIALFILTER" => {
                             if let Some(obj) = self.read_spatial_filter()? {
@@ -7063,31 +7206,36 @@ impl<'a> SectionReader<'a> {
                                 .insert(object.handle, ObjectType::RegisteredClass(object));
                         }
                         _ => {
-                            document.notifications.notify(
-                                crate::notification::NotificationType::NotImplemented,
-                                format!(
-                                    "Object not supported, read as Unknown: {}",
-                                    pair.value_string
-                                ),
-                            );
                             let type_name = pair.value_string.clone();
+                            if !crate::classes::arch::is_architecture_name(&type_name) {
+                                document.notifications.notify(
+                                    crate::notification::NotificationType::NotImplemented,
+                                    format!("Object not supported, read as Unknown: {type_name}"),
+                                );
+                            }
                             let (handle, owner, raw_codes) = self.read_unknown_object_full()?;
-                            document.objects.insert(
-                                handle,
+                            let raw_dxf_codes = if raw_codes.is_empty() {
+                                None
+                            } else {
+                                Some(raw_codes)
+                            };
+                            let object = if crate::classes::arch::is_architecture_name(&type_name) {
+                                let mut arch =
+                                    crate::classes::arch::ArchObject::new(type_name, handle, owner);
+                                arch.raw_dxf_codes = raw_dxf_codes;
+                                ObjectType::Arch(arch)
+                            } else {
                                 ObjectType::Unknown {
                                     type_name,
                                     handle,
                                     owner,
-                                    raw_dxf_codes: if raw_codes.is_empty() {
-                                        None
-                                    } else {
-                                        Some(raw_codes)
-                                    },
+                                    raw_dxf_codes,
                                     raw_dwg_data: None,
                                     raw_dwg_handle_bits: 0,
                                     raw_dwg_version: None,
-                                },
-                            );
+                                }
+                            };
+                            document.objects.insert(handle, object);
                         }
                     }
                     Ok(())
@@ -9812,7 +9960,7 @@ impl<'a> SectionReader<'a> {
                 // (0 = plain dash — must NOT materialize complex data, or every
                 // dashed linetype turns "complex" and renders nothing, #314),
                 // 75 = shape number. These were read swapped AND
-                // unconditionally, so AutoCAD's plain `74 0` gave every element
+                // unconditionally, so ACAD's plain `74 0` gave every element
                 // a Shape{0} complex record.
                 74 => {
                     if let Some(last) = linetype.elements.last_mut() {
@@ -11452,17 +11600,25 @@ impl<'a> SectionReader<'a> {
     }
 
     /// Read an MTEXT R2018+ embedded object (code 101 block), extracting the
-    /// column layout. The MTEXT column data lives here rather than in the
-    /// entity's own codes; other embedded-object codes are consumed and
-    /// ignored. Stops at the next 0-code or the XDATA (>=1000) region.
-    fn read_mtext_embedded_object(&mut self) -> Result<crate::entities::mtext::MTextColumnData> {
+    /// column layout and the attachment point of that layout (group 70). The
+    /// MTEXT column data lives here rather than in the entity's own codes;
+    /// other embedded-object codes are consumed and ignored. Stops at the
+    /// next 0-code or the XDATA (>=1000) region.
+    fn read_mtext_embedded_object(
+        &mut self,
+    ) -> Result<(
+        crate::entities::mtext::MTextColumnData,
+        Option<crate::entities::mtext::AttachmentPoint>,
+    )> {
         let mut col = crate::entities::mtext::MTextColumnData::new();
+        let mut attachment = None;
         while let Some(pair) = self.reader.read_pair()? {
             if pair.code == 0 || pair.code >= 1000 {
                 self.reader.push_back(pair);
                 break;
             }
             match pair.code {
+                70 => attachment = pair.as_i16().map(Into::into),
                 71 => {
                     if let Some(v) = pair.as_i16() {
                         col.column_type = v;
@@ -11501,7 +11657,7 @@ impl<'a> SectionReader<'a> {
                 _ => {}
             }
         }
-        Ok(col)
+        Ok((col, attachment))
     }
 
     /// Try to read common entity codes, including visual-style handle 348.
@@ -11684,6 +11840,31 @@ impl<'a> SectionReader<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Read an entity that is not one of the built-in DXF types.
+    ///
+    /// Arch classes become editable [`ExtendedEntityData::Arch`]
+    /// records. Everything else stays an [`UnknownEntity`].
+    fn read_custom_entity(&mut self, dxf_name: &str) -> Result<EntityType> {
+        let entity = self.read_unknown_entity(dxf_name)?;
+        if !crate::classes::arch::is_architecture_name(dxf_name) {
+            return Ok(EntityType::Unknown(entity));
+        }
+        let mut data = crate::classes::arch::ArchEntityData::from_parts(
+            entity.dxf_name.clone(),
+            String::new(),
+            entity.common.graphic_data.as_deref(),
+        );
+        data.raw_dxf_codes = entity.raw_dxf_codes;
+        data.dwg_type_code = entity.dwg_type_code;
+        data.dwg_handle_bits = entity.dwg_handle_bits;
+        data.raw_dwg_data = entity.raw_dwg_data;
+        data.dwg_source_version = entity.dwg_source_version;
+        Ok(EntityType::Extended(Box::new(ExtendedEntity {
+            common: entity.common,
+            data: ExtendedEntityData::Arch(data),
+        })))
     }
 
     /// Read an unknown entity, capturing common data and preserving
@@ -13443,9 +13624,15 @@ impl<'a> SectionReader<'a> {
                 }
                 // R2018+ column/layout companion — its codes shadow the
                 // entity's own, so it must not fall through this match. The
-                // embedded object carries the MTEXT column layout.
+                // embedded object carries the MTEXT column layout, and its
+                // attachment point is the one CAD applications render from
+                // (ZWCAD writes a different value in group 71 for such texts).
                 101 => {
-                    mtext.column_data = self.read_mtext_embedded_object()?;
+                    let (columns, attachment) = self.read_mtext_embedded_object()?;
+                    mtext.column_data = columns;
+                    if let Some(attachment) = attachment {
+                        mtext.attachment_point = attachment;
+                    }
                     reading_columns = false;
                 }
                 _ => {
@@ -13472,6 +13659,13 @@ impl<'a> SectionReader<'a> {
                 * Vector3::new(rotation.cos(), rotation.sin(), 0.0);
             mtext.rotation = direction.y.atan2(direction.x);
             mtext.dwg_x_direction = Some(direction);
+        }
+
+        // R2007 to R2013 keep the column layout in ACAD extended data.
+        if mtext.column_data.column_type == 0 {
+            if let Some(columns) = mtext_columns_from_xdata(&mtext.common.extended_data) {
+                mtext.column_data = columns;
+            }
         }
 
         Ok(Some(mtext))
@@ -15963,6 +16157,10 @@ impl<'a> SectionReader<'a> {
             end_angle: std::f64::consts::TAU,
             counter_clockwise: true,
         };
+        // Groups 50/51 are circular angles in degrees. Hold them until the
+        // ratio (group 40) has been seen, then store ellipse parameters.
+        let mut start_degrees = Some(0.0);
+        let mut end_degrees: Option<f64> = None;
         // Expected sequence: 10, 20, 11, 21, 40, 50, 51, 73
         for _ in 0..8 {
             if let Some(p) = self.reader.read_pair()? {
@@ -15972,8 +16170,8 @@ impl<'a> SectionReader<'a> {
                     11 => edge.major_axis_endpoint.x = p.as_double().unwrap_or(0.0),
                     21 => edge.major_axis_endpoint.y = p.as_double().unwrap_or(0.0),
                     40 => edge.minor_axis_ratio = p.as_double().unwrap_or(1.0),
-                    50 => edge.start_angle = p.as_double().unwrap_or(0.0),
-                    51 => edge.end_angle = p.as_double().unwrap_or(std::f64::consts::TAU),
+                    50 => start_degrees = p.as_double().or(Some(0.0)),
+                    51 => end_degrees = p.as_double(),
                     73 => edge.counter_clockwise = p.as_i16().unwrap_or(1) != 0,
                     _ => {
                         self.reader.push_back(p);
@@ -15982,6 +16180,20 @@ impl<'a> SectionReader<'a> {
                 }
             }
         }
+        if let Some(degrees) = start_degrees {
+            edge.start_angle = crate::entities::hatch::circular_angle_to_ellipse_param(
+                edge.minor_axis_ratio,
+                degrees.to_radians(),
+            );
+        }
+        edge.end_angle = end_degrees
+            .map(|degrees| {
+                crate::entities::hatch::circular_angle_to_ellipse_param(
+                    edge.minor_axis_ratio,
+                    degrees.to_radians(),
+                )
+            })
+            .unwrap_or(std::f64::consts::TAU);
         Ok(edge)
     }
 
@@ -17650,6 +17862,9 @@ impl<'a> SectionReader<'a> {
         // without text, which the reference application reports as a bad
         // annotation id.
         leader.creation_type = crate::entities::leader::LeaderCreationType::NoAnnotation;
+        // Group 74 defaults to 1 (same direction as the horizontal vector).
+        // AutoCAD omits the group when it has that default.
+        leader.hookline_direction = crate::entities::leader::HooklineDirection::Same;
         let mut normal = PointReader::new();
         let mut horiz_dir = PointReader::new();
         let mut block_offset = PointReader::new();
@@ -22432,7 +22647,7 @@ mod tests {
         }
     }
 
-    /// The inverse block transform AutoCAD 2013 (AC1027) writes for an XCLIP
+    /// The inverse block transform ACAD 2013 (AC1027) writes for an XCLIP
     /// of an insert at (5, 5): one matrix row per group of four, translation
     /// last. Source: ezdxf `exploration/BlockClipped.dxf`, SPATIAL_FILTER #C1.
     #[test]
@@ -22460,7 +22675,7 @@ mod tests {
         assert!(p.y.abs() < 1e-9, "y={}", p.y);
     }
 
-    /// Reads a complete AutoCAD SPATIAL_FILTER object (values from the same
+    /// Reads a complete ACAD SPATIAL_FILTER object (values from the same
     /// AC1027 file) through the DXF reader.
     #[test]
     fn spatial_filter_from_native_dxf_keeps_its_boundary_area() {
@@ -22476,7 +22691,7 @@ mod tests {
             .write_to_vec()
             .unwrap();
         let text = String::from_utf8(bytes).unwrap();
-        // Swap the written object body for AutoCAD's: keep every line up to the
+        // Swap the written object body for ACAD's: keep every line up to the
         // SPATIAL_FILTER type line and from its next group-0 line on.
         let lines: Vec<&str> = text.lines().collect();
         let start = (1..lines.len())
@@ -22579,4 +22794,49 @@ mod tests {
             ]
         );
     }
+}
+
+/// The column layout in an MTEXT's ACAD extended data, between
+/// `ACAD_MTEXT_COLUMN_INFO_BEGIN` and `ACAD_MTEXT_COLUMN_INFO_END`: pairs of a
+/// group code and its value, where code 50 is followed by the height count and
+/// then that many heights.
+fn mtext_columns_from_xdata(
+    xdata: &crate::xdata::ExtendedData,
+) -> Option<crate::entities::mtext::MTextColumnData> {
+    use crate::xdata::XDataValue;
+
+    let record = xdata.records().iter().find(|r| {
+        r.application_name == "ACAD"
+            && r.values
+                .iter()
+                .any(|v| matches!(v, XDataValue::String(s) if s == "ACAD_MTEXT_COLUMN_INFO_BEGIN"))
+    })?;
+    let mut values = record
+        .values
+        .iter()
+        .skip_while(|v| !matches!(v, XDataValue::String(s) if s == "ACAD_MTEXT_COLUMN_INFO_BEGIN"))
+        .skip(1);
+    let mut columns = crate::entities::mtext::MTextColumnData::new();
+    while let Some(code) = values.next() {
+        let XDataValue::Integer16(code) = code else {
+            break; // the END marker, or something this block does not hold
+        };
+        match (code, values.next()?) {
+            (75, XDataValue::Integer16(v)) => columns.column_type = *v,
+            (79, XDataValue::Integer16(v)) => columns.auto_height = *v != 0,
+            (76, XDataValue::Integer16(v)) => columns.column_count = i32::from(*v),
+            (78, XDataValue::Integer16(v)) => columns.flow_reversed = *v != 0,
+            (48, XDataValue::Real(v)) => columns.width = *v,
+            (49, XDataValue::Real(v)) => columns.gutter = *v,
+            (50, XDataValue::Integer16(v)) => {
+                for _ in 0..(*v).max(0) {
+                    if let Some(XDataValue::Real(h)) = values.next() {
+                        columns.heights.push(*h);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (columns.column_type != 0).then_some(columns)
 }

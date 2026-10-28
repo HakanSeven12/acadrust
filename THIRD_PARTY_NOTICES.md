@@ -31,10 +31,9 @@ SOFTWARE.
 
 ## DWG Format References
 
-DWG field layouts and version behavior are based on the Open Design Alliance (ODA) DWG
-specification and reverse engineering, including comparison with drawings produced by CAD
-applications. LibreDWG is used as a secondary cross-check for selected field names and
-layouts. The Reed-Solomon tests cite numeric reference values from LibreDWG's
-`src/reedsolomon.c` to validate the Rust implementation; those values are test data, not
-translated routines. The repository history and source review found no LibreDWG routines
-ported into the implementation. The source comments identify the specific cross-checks.
+The Open Design Alliance (ODA) DWG specification is the primary published reference for
+the binary layouts documented by this project. Where the specification is incomplete or
+ambiguous, implementation details are checked against native DWG files produced by CAD
+applications. Source comments and regression tests identify the evidence used for each
+layout and behavior. ACadSharp remains the attributed origin of the existing reader and
+writer code described above.

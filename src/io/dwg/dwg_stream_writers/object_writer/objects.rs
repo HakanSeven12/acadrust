@@ -180,12 +180,11 @@ fn transcode_xrecord_xdata(
             }
             let source_code_page = raw[p] as u16;
             p += 1;
-            let s = crate::io::dxf::code_page::encoding_from_dwg_code_page(source_code_page)
-                .decode(&raw[p..p + len])
-                .0
-                .into_owned();
+            let source = crate::io::dxf::code_page::encoding_from_dwg_code_page(source_code_page);
+            let s = source.decode(&raw[p..p + len]).0.into_owned();
             p += len;
-            crate::io::dxf::code_page::decode_legacy_escapes(&s)
+            // The escapes were written against the source code page, not the target.
+            crate::io::dxf::code_page::decode_legacy_escapes_in(&s, source)
         };
         if tgt_unicode {
             let utf16: Vec<u16> = text.encode_utf16().take(u16::MAX as usize).collect();
@@ -267,7 +266,7 @@ fn encode_xrecord_entries(
 }
 
 /// Flatten a [`Matrix4`](crate::types::Matrix4) into the 12 doubles of a
-/// spatial-filter transform, as AutoCAD stores them in DWG and DXF code 40:
+/// spatial-filter transform, as ACAD stores them in DWG and DXF code 40:
 /// one matrix row per group of four, translation last; the bottom row is
 /// dropped.
 fn matrix_to_dxf_4x3(m: &crate::types::Matrix4) -> [f64; 12] {
@@ -346,6 +345,12 @@ impl<'a> DwgObjectWriter<'a> {
     /// class, whatever that is) or 0, so readers resolve it to another class
     /// or drop it: it is left out instead.
     pub(super) fn lacks_object_class(&self, object: &ObjectType) -> bool {
+        // A save back to the version the drawing came from has no downgrade to
+        // protect against, so the object stays. Only a save to another version
+        // leaves it out.
+        if self.document.dwg_source_version == Some(self.dxf_version) {
+            return false;
+        }
         let class_only = matches!(
             object,
             ObjectType::ObjectContextData(_)
@@ -469,6 +474,9 @@ impl<'a> DwgObjectWriter<'a> {
             }
             ObjectType::DgnLineStyle(value) => self.write_dgn_line_style_object(value),
             ObjectType::ProxyObject(value) => self.write_proxy_object(value),
+            ObjectType::Arch(value) => {
+                self.write_architecture_object(value);
+            }
             ObjectType::VisualStyle(v) => self.write_visual_style(v),
             ObjectType::Material(m) => self.write_material(m),
             ObjectType::TableContent(t) => self.write_table_content_object(t),
@@ -1505,6 +1513,10 @@ impl<'a> DwgObjectWriter<'a> {
                 ObjectType::TableStyle(_) => {
                     self.document.classes.get_by_name("TABLESTYLE").is_some()
                 }
+                ObjectType::Arch(value) => {
+                    value.raw_dwg_data.is_some()
+                        && self.raw_passthrough_compatible(value.raw_dwg_version)
+                }
                 ObjectType::Unknown {
                     type_name,
                     raw_dwg_data,
@@ -1586,7 +1598,7 @@ impl<'a> DwgObjectWriter<'a> {
             // Dictionary item handles ALWAYS use reference code 2 (soft owner),
             // regardless of the hard-owner flag. The hard/soft distinction is
             // carried only by the is_hardowner byte (and the DXF 350/360 group),
-            // NOT the DWG handle code. Writing code 3 here makes AutoCAD reject
+            // NOT the DWG handle code. Writing code 3 here makes ACAD reject
             // every entry (eWrongObjectType) and discard the whole dictionary.
             // (libredwg dwg.spec: HANDLE_VECTOR_N(itemhandles, numitems, 2, 0).)
             self.writer
@@ -1627,7 +1639,7 @@ impl<'a> DwgObjectWriter<'a> {
         for (name, handle) in &entries {
             self.writer.write_variable_text(name);
             // Dictionary item handles always use reference code 2 (see
-            // write_dictionary) — never code 3, which AutoCAD rejects.
+            // write_dictionary) — never code 3, which ACAD rejects.
             self.writer
                 .write_handle(DwgReferenceType::SoftOwnership, handle.value());
 
@@ -2202,7 +2214,14 @@ impl<'a> DwgObjectWriter<'a> {
     fn write_image_definition(&mut self, def: &ImageDefinition) {
         // UNLISTED type — always use DXF class number (500+)
         let type_code = self.class_type_code("IMAGEDEF", common::OBJ_IMAGEDEF);
-        self.write_common_non_entity_data(type_code, def.handle, def.owner, &def.reactors, &None);
+        // The definition's own list when the document keeps one, else the
+        // reactors derived from the drawing.
+        let reactors = if def.reactors.is_empty() {
+            self.document.image_definition_reactors(def)
+        } else {
+            def.reactors.clone()
+        };
+        self.write_common_non_entity_data(type_code, def.handle, def.owner, &reactors, &None);
 
         self.writer.write_bit_long(def.class_version);
         self.writer.write_2raw_double(crate::types::Vector2::new(
@@ -2319,8 +2338,16 @@ impl<'a> DwgObjectWriter<'a> {
             &obj.xdictionary_handle,
         );
 
-        // AcDbObjectContextData base.
+        // AcDbObjectContextData base. AutoCAD writes class version and the
+        // default flag only. The R2010 file-to-extension-dictionary bit from
+        // ODA §20.4.89 is stored solely for an MLeader context that was read
+        // from that ODA layout (`uses_legacy_mleader_context_base` is false).
         self.writer.write_bit_short(obj.class_version);
+        let oda_mleader_base = matches!(obj.kind, ObjectContextKind::MLeader(_))
+            && !obj.uses_legacy_mleader_context_base;
+        if self.version.r2010_plus() && oda_mleader_base {
+            self.writer.write_bit(obj.has_file_to_extension_dictionary);
+        }
         self.writer.write_bit(obj.is_default);
 
         // AcDbAnnotScaleObjectContextData: first object-specific handle.
@@ -2607,13 +2634,13 @@ impl<'a> DwgObjectWriter<'a> {
             // Sort handles are sort-order keys, NOT object references — they use
             // reference code 0 (Undefined/absolute), per the ODA spec
             // (FIELD_HANDLE(sort_ents, 0, 5)). Writing them as a resolvable
-            // pointer makes AutoCAD's audit dereference them and mark the
+            // pointer makes ACAD's audit dereference them and mark the
             // SORTENTS object ePermanentlyErased when a key has no live object.
             self.writer
                 .write_main_handle(DwgReferenceType::Undefined, entry.sort_handle.value());
         }
         // block_owner is a soft pointer (code 4), not hard — matches the ODA
-        // spec FIELD_HANDLE(block_owner, 4, 0); a hard ref here makes AutoCAD
+        // spec FIELD_HANDLE(block_owner, 4, 0); a hard ref here makes ACAD
         // reject the table (eWrongObjectType).
         self.writer.write_handle(
             DwgReferenceType::SoftPointer,
@@ -2808,7 +2835,8 @@ impl<'a> DwgObjectWriter<'a> {
     fn write_raster_variables(&mut self, rv: &RasterVariables) {
         // UNLISTED type — always use DXF class number (500+)
         let type_code = self.class_type_code("RASTERVARIABLES", common::OBJ_RASTERVARIABLES);
-        self.write_common_non_entity_data(type_code, rv.handle, rv.owner, &[], &None);
+        let reactors = self.document.raster_variables_reactors(rv);
+        self.write_common_non_entity_data(type_code, rv.handle, rv.owner, &reactors, &None);
 
         self.writer.write_bit_long(rv.class_version);
         self.writer.write_bit_short(rv.display_image_frame);

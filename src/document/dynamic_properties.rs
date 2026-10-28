@@ -119,11 +119,11 @@ impl CadDocument {
         &self,
         definition: Handle,
         insert: Option<Handle>,
-    ) -> Result<Vec<DynamicBlockProperty>, String> {
+    ) -> Result<Vec<DynamicBlockProperty>, crate::error::DxfError> {
         let scale = match insert.and_then(|h| self.get_entity(h)) {
             Some(EntityType::Insert(i)) => {
                 let s = i.x_scale().abs();
-                // AutoCAD exposes no dynamic property collection for a
+                // ACAD exposes no dynamic property collection for a
                 // nonuniformly scaled reference. Mirroring is still uniform.
                 if (i.y_scale().abs() - s).abs() > 1e-10 * s.max(1.0)
                     || (i.z_scale().abs() - s).abs() > 1e-10 * s.max(1.0)
@@ -143,7 +143,8 @@ impl CadDocument {
                 return Err(format!(
                     "Missing dynamic evaluation node {:X}",
                     node.expression.value()
-                ));
+                )
+                .into());
             };
             let data = match object {
                 ObjectType::DynamicBlock(o) => &o.data,
@@ -155,7 +156,8 @@ impl CadDocument {
                     return Err(format!(
                         "Unsupported dynamic evaluation object {:X}",
                         node.expression.value()
-                    ))
+                    )
+                    .into())
                 }
             };
             let mut add = |parameter: &BlockParameter,
@@ -182,7 +184,7 @@ impl CadDocument {
                     allowed_values: allowed,
                 });
             };
-            let saved = |id| -> Result<Option<&XRecord>, String> {
+            let saved = |id| -> Result<Option<&XRecord>, crate::error::DxfError> {
                 let record = insert.and_then(|i| self.saved_parameter(i, id));
                 if record.is_some_and(|r| !r.entries_complete) {
                     return Err("Incomplete dynamic parameter cache".into());
@@ -196,7 +198,9 @@ impl CadDocument {
                         _ => cache_points(record).len() >= 2,
                     };
                     if !valid {
-                        return Err(format!("Malformed dynamic parameter cache for node {id}"));
+                        return Err(
+                            format!("Malformed dynamic parameter cache for node {id}").into()
+                        );
                     }
                 }
                 Ok(record)
@@ -483,7 +487,7 @@ impl CadDocument {
         p: &BlockVisibilityParameter,
         insert: Option<Handle>,
         result: &mut Vec<DynamicBlockProperty>,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::error::DxfError> {
         let record = insert.and_then(|i| self.saved_parameter(i, p.eval_node_id));
         if record.is_some_and(|r| !r.entries_complete) {
             return Err("Incomplete visibility cache".into());

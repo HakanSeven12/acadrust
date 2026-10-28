@@ -16,7 +16,7 @@ an installed CAD application. File support spans DXF and DWG R12 through R2018+.
 
 ```toml
 [dependencies]
-acadrust = "0.6.6"
+acadrust = "0.6.8"
 ```
 
 ```rust
@@ -46,7 +46,7 @@ Enable optional features as needed:
 
 ```toml
 [dependencies]
-acadrust = { version = "0.6.6", features = ["serde", "import"] }
+acadrust = { version = "0.6.8", features = ["serde", "import"] }
 ```
 
 To run DWG work sequentially on the calling thread and omit acadrust's Rayon
@@ -54,7 +54,7 @@ dependency, disable default features:
 
 ```toml
 [dependencies]
-acadrust = { version = "0.6.6", default-features = false }
+acadrust = { version = "0.6.8", default-features = false }
 ```
 
 Cargo features are additive: another dependency enabling `acadrust/parallel`
@@ -70,7 +70,7 @@ application-owned pool once and reuse it for all DWG jobs:
 
 ```toml
 [dependencies]
-acadrust = "0.6.6"
+acadrust = "0.6.8"
 rayon = "1"
 ```
 
@@ -118,7 +118,10 @@ keeps acadrust's work on its calling thread.
   pre-2007 drawings
 - **Optional serialization** — Serde support for document data
 - **Optional 3D imports** — STL, COLLADA, OBJ, glTF/GLB, and FBX converted to
-  acadrust documents
+  acadrust documents, including node and parent transforms
+- **ACAD Arch** — Read and preserve AEC classes, construct straight walls,
+  doors, and windows, and edit supported native parameters. See the
+  [Arch API](src/classes/arch/API.md)
 
 ## File Version Support
 
@@ -267,6 +270,7 @@ fn main() -> acadrust::Result<()> {
 ## Documentation
 
 - [API documentation](https://docs.rs/acadrust)
+- [Arch API](src/classes/arch/API.md)
 - [Paper-space viewport example](examples/viewport_layouts.rs)
 
 ## Development

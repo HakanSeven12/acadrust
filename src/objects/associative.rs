@@ -1,6 +1,6 @@
 //! Semantic model for associative-network objects.
 //!
-//! AutoCAD stores most associative objects as short inheritance chains.  The
+//! ACAD stores most associative objects as short inheritance chains.  The
 //! shared structs below mirror those chains so DWG and DXF use one lossless
 //! representation instead of class-specific byte blobs.
 
@@ -1426,7 +1426,7 @@ pub fn associative_canonical_name(name: &str) -> String {
         upper
     };
     match canonical.as_str() {
-        // Seen in Autodesk/LibreDWG class tables without the second `D`.
+        // Native class tables include this spelling without the second `D`.
         "ASSOCALIGNEDIMACTIONBODY" => "ASSOCALIGNEDDIMACTIONBODY".to_string(),
         "ACDBPERSSUBENTMANAGER" => "PERSUBENTMGR".to_string(),
         "ACDBDIMASSOC" => "DIMASSOC".to_string(),

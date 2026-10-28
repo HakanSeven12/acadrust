@@ -292,12 +292,12 @@ pub struct Layout {
 
     // ── Remaining embedded PlotSettings fields ──────────────────────────────
     // The LAYOUT object embeds a full PlotSettings record. Preserving only the
-    // paper size left the sheet unsized in AutoCAD (rendered tiny in the corner
+    // paper size left the sheet unsized in ACAD (rendered tiny in the corner
     // because the paper-size name / units / margins were dropped). Keep the rest
     // so the layout round-trips faithfully. See issue #156.
     pub plot_page_name: String,
     pub plot_printer_name: String,
-    /// Paper-size name (e.g. "ISO_A4_(210.00_x_297.00_MM)"). AutoCAD renders the
+    /// Paper-size name (e.g. "ISO_A4_(210.00_x_297.00_MM)"). ACAD renders the
     /// sheet from this; an empty name shows no/wrong paper.
     pub paper_size: String,
     pub plot_view_name: String,
@@ -472,6 +472,8 @@ pub enum ObjectType {
     DgnLineStyle(DgnLineStyleObject),
     /// Fixed ACAD proxy-object schema.
     ProxyObject(ProxyObject),
+    /// ACAD Arch non-graphical class (style, display rep, anchor, list).
+    Arch(crate::classes::arch::ArchObject),
     /// Unknown object type (stored as raw data)
     Unknown {
         /// Object type name
@@ -524,6 +526,11 @@ impl ObjectType {
             ObjectType::RegisteredClass(value) => {
                 value.raw_dwg_data = None;
                 value.raw_dwg_version = None;
+            }
+            ObjectType::Arch(value) => {
+                value.raw_dwg_data = None;
+                value.raw_dwg_version = None;
+                value.raw_dxf_codes = None;
             }
             ObjectType::Unknown {
                 raw_dxf_codes,
@@ -582,6 +589,7 @@ impl ObjectType {
             ObjectType::RegisteredClass(value) => value.handle,
             ObjectType::DgnLineStyle(value) => value.handle,
             ObjectType::ProxyObject(value) => value.handle,
+            ObjectType::Arch(value) => value.handle,
             ObjectType::Unknown { handle, .. } => *handle,
         }
     }
@@ -619,6 +627,11 @@ impl ObjectType {
             (Self::RegisteredClass(value), Self::RegisteredClass(source)) => {
                 value.raw_dwg_data = source.raw_dwg_data.clone();
                 value.raw_dwg_version = source.raw_dwg_version;
+            }
+            (Self::Arch(value), Self::Arch(source)) => {
+                value.raw_dwg_data = source.raw_dwg_data.clone();
+                value.raw_dwg_version = source.raw_dwg_version;
+                value.raw_dxf_codes = source.raw_dxf_codes.clone();
             }
             (
                 Self::Unknown {
@@ -683,6 +696,7 @@ impl ObjectType {
             ObjectType::RegisteredClass(value) => value.handle = handle,
             ObjectType::DgnLineStyle(value) => value.handle = handle,
             ObjectType::ProxyObject(value) => value.handle = handle,
+            ObjectType::Arch(value) => value.handle = handle,
             ObjectType::Unknown {
                 handle: old_handle, ..
             } => *old_handle = handle,
@@ -728,6 +742,7 @@ impl ObjectType {
             ObjectType::RegisteredClass(value) => value.handle.is_null(),
             ObjectType::DgnLineStyle(value) => value.handle.is_null(),
             ObjectType::ProxyObject(value) => value.handle.is_null(),
+            ObjectType::Arch(value) => value.handle.is_null(),
             ObjectType::Unknown { handle, .. } => handle.is_null(),
         }
     }

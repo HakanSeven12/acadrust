@@ -49,7 +49,7 @@ R2018 oracle. ASCII rounding, the absent DXF registry flag, a raised node ID
 seed, and AutoCAD's reordering of the owned-action set are the only allowed
 normalizations. No source-record passthrough is used to claim writer coverage.
 
-The public LibreDWG `2010/Constraints.dwg` reproducer initially failed with
+The public `2010/Constraints.dwg` reproducer initially failed with
 `Invalid DWG array count 1073742597`. The patched reader preserves all nine real
 nodes. All five conversion routes reopen with one group, five geometries,
 four constraints, and zero audit errors.

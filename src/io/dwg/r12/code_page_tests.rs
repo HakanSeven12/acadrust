@@ -2,7 +2,7 @@ use super::import_handles_tests::{fixture, record};
 use super::*;
 use crate::{DwgReader, DwgWriter, EntityType};
 
-// AutoCAD 2025 on a Windows-1252 host interpreted these bytes as Windows-1252
+// ACAD 2025 on a Windows-1252 host interpreted these bytes as Windows-1252
 // across all eight declarations in Ottosson's checks. Keep that opt-in.
 fn encoded_fixture(declared_page: u16) -> Vec<u8> {
     let mut tables: [Vec<EntityRecord>; 10] = std::array::from_fn(|_| Vec::new());

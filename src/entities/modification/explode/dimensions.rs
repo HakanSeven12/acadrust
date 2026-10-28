@@ -72,7 +72,7 @@ pub(super) fn dimension_text_value(dim: &Dimension, style: Option<&DimStyle>) ->
                 .unwrap_or_else(|| format!("{:.4}", dim.measurement())),
         );
     };
-    // A single space is AutoCAD's documented text suppression convention.
+    // A single space is ACAD's documented text suppression convention.
     if override_text == " " {
         return None;
     }
@@ -251,7 +251,7 @@ pub(crate) fn explode_dimension_with_style(
                     base.normal,
                     common,
                 ));
-                // AutoCAD leaves a text gap in the dimension line.  Emit the two
+                // ACAD leaves a text gap in the dimension line.  Emit the two
                 // visible portions around the text location.
                 let axis = second_on_line - first_on_line;
                 let t = if axis.length_squared() > 1e-20 {
@@ -312,7 +312,7 @@ pub(crate) fn explode_dimension_with_style(
                     common,
                 ));
                 // Keep the measured alignment and split the dimension line at
-                // the text location, matching AutoCAD's five LINE result.
+                // the text location, matching ACAD's five LINE result.
                 result.push(line_entity(
                     d.first_point,
                     d.second_point,

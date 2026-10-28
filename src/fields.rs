@@ -152,6 +152,7 @@ fn owner_of(doc: &CadDocument, h: Handle) -> Option<Handle> {
     match doc.objects.get(&h)? {
         ObjectType::Dictionary(d) => Some(d.owner),
         ObjectType::Unknown { owner, .. } => Some(*owner),
+        ObjectType::Arch(object) => Some(object.owner),
         _ => None,
     }
 }
@@ -1055,11 +1056,17 @@ fn area(e: &EntityType) -> Option<f64> {
 fn bulge_vertices(e: &EntityType) -> Option<(Vec<(f64, f64, f64)>, bool)> {
     let (vertices, closed): (Vec<_>, bool) = match e {
         EntityType::LwPolyline(p) => (
-            p.vertices.iter().map(|v| (v.location.x, v.location.y, v.bulge)).collect(),
+            p.vertices
+                .iter()
+                .map(|v| (v.location.x, v.location.y, v.bulge))
+                .collect(),
             p.is_closed,
         ),
         EntityType::Polyline2D(p) => (
-            p.vertices.iter().map(|v| (v.location.x, v.location.y, v.bulge)).collect(),
+            p.vertices
+                .iter()
+                .map(|v| (v.location.x, v.location.y, v.bulge))
+                .collect(),
             p.is_closed(),
         ),
         _ => return None,
@@ -1986,7 +1993,7 @@ fn diesel_macro(doc: &CadDocument, inner: &str, ctx: &dyn FieldContext) -> Optio
     })
 }
 
-/// AutoCAD system variables the engine answers directly (from the document +
+/// ACAD system variables the engine answers directly (from the document +
 /// context clock); anything else is delegated to the host via
 /// [`FieldContext::getvar`]. `None` keeps the cached field text.
 fn getvar(doc: &CadDocument, name: &str, ctx: &dyn FieldContext) -> Option<String> {

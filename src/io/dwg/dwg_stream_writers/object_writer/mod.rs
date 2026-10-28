@@ -23,6 +23,7 @@ pub mod data_objects;
 pub mod dynamic_block;
 pub mod entities;
 pub mod field;
+mod native_architecture;
 pub mod objects;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -67,7 +68,8 @@ fn dwg_block_name<'a>(
             return "*Paper_Space";
         }
         if record.name.eq_ignore_ascii_case("*Paper_Space") {
-            if let Some(active_record) = document.block_records.iter().find(|r| r.handle == active) {
+            if let Some(active_record) = document.block_records.iter().find(|r| r.handle == active)
+            {
                 return &active_record.name;
             }
         }
@@ -76,7 +78,10 @@ fn dwg_block_name<'a>(
         let prefix_end = record.name[1..]
             .find(|c: char| !c.is_ascii_alphabetic())
             .map_or(record.name.len(), |pos| pos + 1);
-        if record.name[prefix_end..].chars().all(|c| c.is_ascii_digit()) {
+        if record.name[prefix_end..]
+            .chars()
+            .all(|c| c.is_ascii_digit())
+        {
             return &record.name[..prefix_end];
         }
     }
@@ -2314,7 +2319,7 @@ impl<'a> DwgObjectWriter<'a> {
         // R2000+: insert handles come BEFORE the layout handle (ODA spec
         // order: endblk, inserts[num_inserts], layout). Writing layout first
         // desyncs the handle stream for any block that is referenced by an
-        // insert, making AutoCAD discard the block record (eWrongObjectType).
+        // insert, making ACAD discard the block record (eWrongObjectType).
         if self.version.r2000_plus() {
             for ih in self.block_insert_handles(record) {
                 self.writer
@@ -2698,5 +2703,82 @@ mod tests {
         let expected = document.extension_dictionary_handle(owner);
         let writer = DwgObjectWriter::new(&document).expect("writer");
         assert_eq!(writer.extension_dictionary_handle(owner), expected);
+    }
+}
+
+/// Objects of a class the output does not register. A save to an older
+/// version leaves them out (they would be written under the fallback type
+/// code 500). A save back to the version the drawing was read from has no
+/// such problem to solve, so the object stays.
+#[cfg(test)]
+mod unregistered_class_tests {
+    use super::*;
+    use crate::objects::{AssociativeObject, DataObject, DataObjectData};
+
+    fn data_object_handles(version: DxfVersion, source: Option<DxfVersion>) -> Vec<u64> {
+        let mut doc = CadDocument::with_version(version);
+        doc.dwg_source_version = source;
+        let handle = Handle::new(0x7000);
+        let mut object = DataObject::new(DataObjectData::BreakPointRef);
+        object.handle = handle;
+        doc.objects.insert(handle, ObjectType::DataObject(object));
+        doc.classes.clear();
+        assert!(doc.classes.get_by_name("BREAKPOINTREF").is_none());
+        let (_, handles, _, _) = DwgObjectWriter::new(&doc).unwrap().write();
+        handles.into_iter().map(|(h, _)| h).collect()
+    }
+
+    fn associative_handles(version: DxfVersion, source: Option<DxfVersion>) -> Vec<u64> {
+        let mut doc = CadDocument::with_version(version);
+        doc.dwg_source_version = source;
+        let handle = Handle::new(0x7100);
+        let mut object =
+            AssociativeObject::new("ACDBASSOCPERSSUBENTMANAGER", "AcDbAssocPersSubentManager");
+        object.handle = handle;
+        doc.objects.insert(handle, ObjectType::Associative(object));
+        doc.classes.clear();
+        let (_, handles, _, _) = DwgObjectWriter::new(&doc).unwrap().write();
+        handles.into_iter().map(|(h, _)| h).collect()
+    }
+
+    #[test]
+    fn an_object_with_no_registered_class_is_left_out_of_an_older_save() {
+        for version in [DxfVersion::AC1014, DxfVersion::AC1015, DxfVersion::AC1018] {
+            assert!(
+                !data_object_handles(version, None).contains(&0x7000),
+                "{version:?}: an object of an unregistered class was written (as type 500)"
+            );
+        }
+    }
+
+    #[test]
+    fn an_object_with_no_registered_class_is_left_out_when_the_source_is_another_version() {
+        assert!(
+            !data_object_handles(DxfVersion::AC1015, Some(DxfVersion::AC1018)).contains(&0x7000)
+        );
+    }
+
+    #[test]
+    fn an_associative_object_with_no_registered_class_is_left_out_of_an_older_save() {
+        for version in [DxfVersion::AC1014, DxfVersion::AC1015, DxfVersion::AC1018] {
+            assert!(
+                !associative_handles(version, None).contains(&0x7100),
+                "{version:?}: an associative object of an unregistered class was written as type 500"
+            );
+        }
+    }
+
+    #[test]
+    fn a_same_version_save_keeps_it() {
+        assert!(
+            data_object_handles(DxfVersion::AC1015, Some(DxfVersion::AC1015)).contains(&0x7000)
+        );
+    }
+
+    #[test]
+    fn a_same_version_save_keeps_an_associative_object() {
+        assert!(
+            associative_handles(DxfVersion::AC1018, Some(DxfVersion::AC1018)).contains(&0x7100)
+        );
     }
 }

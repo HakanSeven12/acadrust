@@ -1,6 +1,6 @@
 [package]
 name = "acadrust"
-version = "0.6.6"
+version = "0.6.8"
 edition = "2021"
 authors = ["Hakan AK"]
 description = "A pure Rust library for reading and writing CAD files in DXF format (ASCII and Binary) and DWG format (Binary)."
@@ -16,7 +16,7 @@ categories = ["parser-implementations", "encoding"]
 default = ["parallel"]
 parallel = ["dep:rayon"]
 serde = ["dep:serde", "bitflags/serde", "indexmap/serde"]
-import = ["dep:quick-xml"]
+import = ["dep:quick-xml", "dep:serde_json"]
 
 [dependencies]
 # Error handling
@@ -44,6 +44,9 @@ serde = { version = "1", features = ["derive", "rc"], optional = true }
 
 # XML parsing (optional, for COLLADA import)
 quick-xml = { version = "0.36", optional = true }
+
+# JSON parsing (optional, for glTF import)
+serde_json = { version = "1", optional = true, features = ["preserve_order"] }
 
 # Utilities
 bitflags = "2.4"

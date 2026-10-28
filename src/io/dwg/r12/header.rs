@@ -1,4 +1,4 @@
-//! Fixed-layout AC1009 (AutoCAD R11/R12) drawing and table headers.
+//! Fixed-layout AC1009 (ACAD R11/R12) drawing and table headers.
 
 use crate::document::{HeaderVariables, LegacyHeaderState};
 use crate::error::{DxfError, Result};
@@ -168,6 +168,7 @@ impl R12Header {
         )?;
         let mut state = LegacyHeaderState::default();
         legacy_state(&mut codec, &mut state)?;
+        target.unit_mode = state.unit_mode;
         target.legacy = Some(state);
         Ok(())
     }
@@ -249,6 +250,7 @@ pub(super) fn read_header_with_code_page(
     )?;
     let mut state = LegacyHeaderState::default();
     legacy_state(&mut c, &mut state)?;
+    header.variables.unit_mode = state.unit_mode;
     header.variables.legacy = Some(state);
     if header.layout.entities_start < (variables_end + 18) as u32
         || header.layout.entities_end < header.layout.entities_start
@@ -329,7 +331,9 @@ pub fn write_header(
     c.pos = 0x5e;
     variables(&mut c, &mut header.clone(), &mut references.clone(), count)?;
     if let Some(state) = &header.legacy {
-        legacy_state(&mut c, &mut state.clone())?;
+        let mut state = state.clone();
+        state.unit_mode = header.unit_mode;
+        legacy_state(&mut c, &mut state)?;
     }
     let checksum = crc::crc16(crc::CRC16_SEED, &c.data[..variables_end]);
     let mut output = c.data[..variables_end].to_vec();
@@ -564,8 +568,9 @@ impl Codec {
         if self.read {
             let bytes = &self.data[self.pos..self.pos + length];
             let end = bytes.iter().position(|byte| *byte == 0).unwrap_or(length);
-            *value = crate::io::dxf::code_page::decode_legacy_escapes(
+            *value = crate::io::dxf::code_page::decode_legacy_escapes_in(
                 &self.encoding.decode(&bytes[..end]).0,
+                self.encoding,
             );
         } else {
             let bytes = crate::io::dxf::code_page::encode_legacy_string(value, self.encoding);
@@ -600,8 +605,10 @@ impl Codec {
                         .take_while(|byte| *byte != 0),
                 );
             }
-            *value =
-                crate::io::dxf::code_page::decode_legacy_escapes(&self.encoding.decode(&bytes).0);
+            *value = crate::io::dxf::code_page::decode_legacy_escapes_in(
+                &self.encoding.decode(&bytes).0,
+                self.encoding,
+            );
         } else {
             let bytes = crate::io::dxf::code_page::encode_legacy_string(value, self.encoding);
             if bytes.contains(&0) || bytes.len() > MENU_PREFIX_LEN + MENU_CONTINUATION_LEN {

@@ -171,6 +171,11 @@ pub struct HeaderVariables {
     // ==================== Version-specific Flags ====================
     /// REQUIREDVERSIONS (R2013+) - Bit coded required versions
     pub required_versions: i64,
+    /// `$ACADMAINTVER` as a DXF header carries it (AutoCAD's maintenance build
+    /// number, for example 329 for an AC1032 save). 0 when the file has none, as a
+    /// DWG's header does not. Not the DWG file-header byte that
+    /// [`CadDocument::maintenance_version`] holds, which is a different quantity.
+    pub acad_maintenance_version: i32,
 
     // ==================== Drawing Mode Flags ====================
     /// DIMASO - Associates dimensions with geometry
@@ -331,6 +336,22 @@ pub struct HeaderVariables {
     pub dim_text_fill: i16,
     /// DIMTFILLCLR - Dimension text background fill color
     pub dim_text_fill_color: Color,
+    /// DIMTXTDIRECTION - Dimension text reads right to left
+    pub dim_text_direction: bool,
+    /// DIMALTMZF - Alternate units zero suppression scale factor
+    pub dim_alt_mzf: f64,
+    /// DIMALTMZS - Alternate units zero suppression text
+    pub dim_alt_mzs: String,
+    /// DIMMZF - Zero suppression scale factor
+    pub dim_mzf: f64,
+    /// DIMMZS - Zero suppression text
+    pub dim_mzs: String,
+    /// CSHADOW - Shadow casting mode of new objects
+    pub cast_shadow: i16,
+    /// UCSORGTOP, BOTTOM, LEFT, RIGHT, FRONT, BACK
+    pub ucs_ortho_origins: [Vector3; 6],
+    /// PUCSORGTOP, BOTTOM, LEFT, RIGHT, FRONT, BACK
+    pub paper_ucs_ortho_origins: [Vector3; 6],
     /// DIMASSOC - Dimension associativity (0=no, 1=non-exploded, 2=associative)
     pub dimension_associativity: i16,
     /// PROJECTNAME - Project name
@@ -558,6 +579,12 @@ pub struct HeaderVariables {
     pub dim_alt_tolerance_zero_tight: i16,
     /// DIMFIT/DIMATFIT - Fit options
     pub dim_fit: i16,
+    /// DIMFIT - the R13 fit variable that R2000 replaced with DIMATFIT
+    pub dim_fit_r13: i16,
+    /// DIMUNIT - the R13 unit format variable that R2000 replaced with DIMLUNIT
+    pub dim_unit: i16,
+    /// UNITMODE - display of fractional, feet and inches units
+    pub unit_mode: i16,
     /// DIMUPT - User positioned text
     pub dim_user_positioned_text: bool,
     /// DIMPOST - Primary units suffix
@@ -623,6 +650,8 @@ pub struct HeaderVariables {
     pub paper_ucs_ortho_ref: Handle,
     /// PUCSORTHOVIEW - Paper space UCS orthographic view type
     pub paper_ucs_ortho_view: i16,
+    /// PUCSBASE - name of the UCS the paper space orthographic origins are relative to
+    pub paper_ucs_base: String,
 
     // ==================== Handles/References ====================
     /// HANDSEED - Next available handle
@@ -655,6 +684,14 @@ pub struct HeaderVariables {
     pub dim_arrow_block2_handle: Handle,
     /// Leader arrow block handle (DIMLDRBLK)
     pub dim_leader_arrow_block_handle: Handle,
+    /// DIMTXSTY - name of the dimension text style
+    pub dim_text_style_name: String,
+    /// DIMLTYPE - name of the dimension line linetype
+    pub dim_linetype_name: String,
+    /// DIMLTEX1 - name of the first extension line linetype
+    pub dim_linetype1_name: String,
+    /// DIMLTEX2 - name of the second extension line linetype
+    pub dim_linetype2_name: String,
     /// DIMLWD - Dimension line weight
     pub dim_line_weight: i16,
     /// DIMLWE - Extension line weight
@@ -791,6 +828,7 @@ impl Default for HeaderVariables {
             legacy: None,
             // Version-specific flags
             required_versions: 0,
+            acad_maintenance_version: 0,
 
             // Drawing mode flags
             associate_dimensions: true,
@@ -853,9 +891,9 @@ impl Default for HeaderVariables {
             sort_entities: 127,
             index_control: 0,
             hide_text: 1,
-            // AutoCAD's default: clip frames display (not plotted). Older
+            // ACAD's default: clip frames display (not plotted). Older
             // headers (R2000) don't carry the variable at all, so the default
-            // must match what AutoCAD shows for them.
+            // must match what ACAD shows for them.
             xclip_frame: 2,
             // New drawings show DWF frames without plotting them and hide
             // DGN frames.
@@ -879,6 +917,14 @@ impl Default for HeaderVariables {
             dim_jog_angle: std::f64::consts::FRAC_PI_4,
             dim_text_fill: 0,
             dim_text_fill_color: Color::ByBlock,
+            dim_text_direction: false,
+            dim_alt_mzf: 0.0,
+            dim_alt_mzs: String::new(),
+            dim_mzf: 0.0,
+            dim_mzs: String::new(),
+            cast_shadow: 0,
+            ucs_ortho_origins: [Vector3::ZERO; 6],
+            paper_ucs_ortho_origins: [Vector3::ZERO; 6],
             dimension_associativity: 2,
             project_name: String::new(),
 
@@ -996,6 +1042,9 @@ impl Default for HeaderVariables {
             dim_alt_tolerance_zero_suppression: 0,
             dim_alt_tolerance_zero_tight: 0,
             dim_fit: 3,
+            dim_fit_r13: 0,
+            dim_unit: 0,
+            unit_mode: 0,
             dim_user_positioned_text: false,
             dim_post: String::new(),
             dim_alt_post: String::new(),
@@ -1032,6 +1081,7 @@ impl Default for HeaderVariables {
             ucs_ortho_view: 0,
             paper_ucs_ortho_ref: Handle::NULL,
             paper_ucs_ortho_view: 0,
+            paper_ucs_base: String::new(),
 
             // Handles
             handle_seed: 1,
@@ -1049,6 +1099,10 @@ impl Default for HeaderVariables {
             dim_arrow_block1_handle: Handle::NULL,
             dim_arrow_block2_handle: Handle::NULL,
             dim_leader_arrow_block_handle: Handle::NULL,
+            dim_text_style_name: String::from("Standard"),
+            dim_linetype_name: String::from("ByBlock"),
+            dim_linetype1_name: String::from("ByBlock"),
+            dim_linetype2_name: String::from("ByBlock"),
             dim_line_weight: -2,     // ByBlock
             dim_ext_line_weight: -2, // ByBlock
 
@@ -1164,7 +1218,7 @@ pub struct FieldDef {
 }
 
 /// Document summary information (the DWG `SummaryInfo` section — the same
-/// properties AutoCAD's DWGPROPS dialog edits). Backs the Document-category
+/// properties ACAD's DWGPROPS dialog edits). Backs the Document-category
 /// dynamic-text fields (Author, Title, Subject, Keywords, Comments,
 /// HyperlinkBase, RevisionNumber) plus arbitrary custom properties.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -1189,7 +1243,7 @@ pub struct CadDocument {
     /// Document version
     pub version: DxfVersion,
 
-    /// AutoCAD maintenance release version (from file header byte 0x0B).
+    /// ACAD maintenance release version (from file header byte 0x0B).
     ///
     /// Used to determine encoding variations within a major DWG version.
     /// For AC1024 (R2010), maintenance > 3 triggers an extra 4-byte RL field
@@ -1574,7 +1628,7 @@ impl CadDocument {
             view_rep_refs: std::collections::HashMap::new(),
             section_view_reps: Vec::new(),
             // Start handle allocation above reserved table handles (0x1-0xA)
-            // Table handles are well-known fixed values used by AutoCAD
+            // Table handles are well-known fixed values used by ACAD
             next_handle: 0x10,
         };
 
@@ -1591,16 +1645,12 @@ impl CadDocument {
     }
 
     /// Rename a layer and every name-based reference to it.
-    pub fn rename_layer(
-        &mut self,
-        old_name: &str,
-        new_name: &str,
-    ) -> std::result::Result<Handle, String> {
+    pub fn rename_layer(&mut self, old_name: &str, new_name: &str) -> crate::error::Result<Handle> {
         if old_name == new_name || !valid_symbol_table_name(new_name) {
-            return Err("Invalid layer rename".to_string());
+            return Err("Invalid layer rename".into());
         }
         let Some(source) = self.layers.get(old_name) else {
-            return Err(format!("Layer '{old_name}' does not exist"));
+            return Err(format!("Layer '{old_name}' does not exist").into());
         };
         let source_name = source.name.clone();
         let source_handle = source.handle;
@@ -1609,7 +1659,7 @@ impl CadDocument {
             || source_key == normalize_name("Defpoints")
             || source_name.contains('|')
         {
-            return Err(format!("Layer '{source_name}' cannot be renamed"));
+            return Err(format!("Layer '{source_name}' cannot be renamed").into());
         }
         let app_handles: HashMap<String, u64> = self
             .app_ids
@@ -1640,10 +1690,16 @@ impl CadDocument {
             .is_some_and(|layer| !layer.handle.is_valid());
         let layer_handle = if needs_handle {
             let handle = self.allocate_handle();
-            self.layers.get_mut(new_name).unwrap().handle = handle;
+            self.layers
+                .get_mut(new_name)
+                .expect("renamed layer is present")
+                .handle = handle;
             handle
         } else {
-            self.layers.get(new_name).unwrap().handle
+            self.layers
+                .get(new_name)
+                .expect("renamed layer is present")
+                .handle
         };
         self.rename_layer_state_references(&source_key, new_name);
         for handle in affected {
@@ -1705,14 +1761,13 @@ impl CadDocument {
             return false;
         }
         // Unsupported non-graphical objects preserved as raw bytes.
-        let raw_objects = self.objects.values().any(|o| {
-            matches!(
-                o,
-                crate::objects::ObjectType::Unknown {
-                    raw_dwg_data: Some(_),
-                    ..
-                }
-            )
+        let raw_objects = self.objects.values().any(|object| match object {
+            crate::objects::ObjectType::Unknown {
+                raw_dwg_data: Some(_),
+                ..
+            } => true,
+            crate::objects::ObjectType::Arch(value) => value.raw_dwg_data.is_some(),
+            _ => false,
         });
         if raw_objects {
             return true;
@@ -1721,6 +1776,11 @@ impl CadDocument {
         let raw_entities = self.entities.iter().any(|e| {
             let raw = match e.as_ref() {
                 crate::entities::EntityType::Unknown(u) => u.raw_dwg_data.is_some(),
+                crate::entities::EntityType::Extended(entity) => matches!(
+                    &entity.data,
+                    crate::entities::ExtendedEntityData::Arch(data)
+                        if data.raw_dwg_data.is_some()
+                ),
                 _ => false,
             };
             raw || !e.common().extended_data.raw_dwg_eed.is_empty()
@@ -1857,7 +1917,7 @@ impl CadDocument {
         self.header.acad_layout_dict_handle = self.allocate_handle();
         self.header.acad_plotsettings_dict_handle = self.allocate_handle();
         self.header.acad_plotstylename_dict_handle = self.allocate_handle();
-        // R2004+/R2007+ dictionaries (AutoCAD requires these even if empty)
+        // R2004+/R2007+ dictionaries (ACAD requires these even if empty)
         self.header.acad_material_dict_handle = self.allocate_handle();
         self.header.acad_color_dict_handle = self.allocate_handle();
         self.header.acad_visualstyle_dict_handle = self.allocate_handle();
@@ -3740,12 +3800,42 @@ impl CadDocument {
         Some(entity)
     }
 
-    /// Remove an entity by handle
+    /// Remove an entity by handle.
+    ///
+    /// Arch entities anchored to this one (a door, window, opening, or
+    /// window corner on a wall) are removed with it, along with the anchor and
+    /// associative objects they own.
     pub fn remove_entity(&mut self, handle: Handle) -> Option<EntityType> {
-        let entity = self.remove_entity_arc(handle)?;
-        // Hand back an owned entity: take it out of the Arc if we hold the last
-        // reference (a snapshot may still share it), else clone.
-        Some(Arc::try_unwrap(entity).unwrap_or_else(|a| (*a).clone()))
+        if self.get_entity(handle).is_none() {
+            return None;
+        }
+        let mut queue = vec![handle];
+        let mut doomed = Vec::new();
+        let mut seen = HashSet::new();
+        while let Some(handle) = queue.pop() {
+            if !seen.insert(handle) {
+                continue;
+            }
+            if crate::classes::arch::is_architecture_entity(self, handle) {
+                queue.extend(crate::classes::arch::entities_anchored_to(self, handle));
+            }
+            doomed.push(handle);
+        }
+        let mut removed = None;
+        for handle in doomed {
+            for owned in crate::classes::arch::objects_owned_by(self, handle) {
+                self.objects.remove(&owned);
+                self.reactors_by_handle.remove(&owned);
+            }
+            let Some(entity) = self.remove_entity_arc(handle) else {
+                continue;
+            };
+            let entity = Arc::try_unwrap(entity).unwrap_or_else(|arc| (*arc).clone());
+            if removed.is_none() {
+                removed = Some(entity);
+            }
+        }
+        removed
     }
 
     /// Add a new paper space layout to the document.
@@ -3774,7 +3864,7 @@ impl CadDocument {
         }
 
         // Determine the next *Paper_Space block name.
-        // AutoCAD uses: *Paper_Space, *Paper_Space0, *Paper_Space1, …
+        // ACAD uses: *Paper_Space, *Paper_Space0, *Paper_Space1, …
         let ps_count = self
             .block_records
             .iter()
@@ -3803,9 +3893,7 @@ impl CadDocument {
 
         // Link block record → layout
         block_record.layout = layout_handle;
-        self.block_records
-            .add(block_record)
-            .map_err(|e| crate::error::DxfError::Custom(e))?;
+        self.block_records.add(block_record)?;
 
         // Create the overall paper space viewport (ID=1) for this layout.
         // Every paper space layout requires this entity.
@@ -3854,7 +3942,7 @@ impl CadDocument {
             })
             .collect();
         for record in self.block_records.iter_mut() {
-            // Preserve an explicitly saved self-reference. AutoCAD leaves this
+            // Preserve an explicitly saved self-reference. ACAD leaves this
             // unresolved when the drawing is loaded as an xref; callers can use
             // the Layout's reverse link when opening it as the root drawing.
             if record.layout == record.handle {
@@ -4030,9 +4118,7 @@ impl CadDocument {
                     ObjectType::Layout(layout) if !layout.owner.is_null() => Some(layout.owner),
                     _ => None,
                 })
-                .filter(|owner| {
-                    matches!(self.objects.get(owner), Some(ObjectType::Dictionary(_)))
-                })
+                .filter(|owner| matches!(self.objects.get(owner), Some(ObjectType::Dictionary(_))))
                 .collect();
             candidates.sort_unstable();
             candidates.dedup();
@@ -4190,6 +4276,7 @@ impl CadDocument {
             ObjectType::RegisteredClass(value) => Some(value.owner),
             ObjectType::DgnLineStyle(value) => Some(value.owner),
             ObjectType::ProxyObject(value) => Some(value.owner),
+            ObjectType::Arch(value) => Some(value.owner),
             ObjectType::Unknown { owner, .. } => Some(*owner),
             ObjectType::UnderlayDefinition(_) => None,
         }
@@ -4247,6 +4334,61 @@ impl CadDocument {
         let before = raw.len();
         raw.retain(|(owner, _)| *owner != app_handle);
         raw.len() != before
+    }
+
+    /// The reactors an image definition lists (DXF Reference, IMAGEDEF):
+    /// its owner dictionary, then the IMAGEDEF_REACTOR of each image that
+    /// uses it. The ones a DWG read kept win; a drawing read from DXF, or
+    /// built in code, gets them from its images. AutoCAD lists an image whose
+    /// definition has none as unreferenced.
+    pub(crate) fn image_definition_reactors(
+        &self,
+        definition: &crate::objects::ImageDefinition,
+    ) -> Vec<Handle> {
+        if let Some(saved) = self.reactors_by_handle.get(&definition.handle) {
+            return saved.clone();
+        }
+        let mut reactors = Vec::new();
+        if !definition.owner.is_null() {
+            reactors.push(definition.owner);
+        }
+        for entity in self.entities() {
+            let EntityType::RasterImage(image) = entity else {
+                continue;
+            };
+            if image.definition_handle != Some(definition.handle) {
+                continue;
+            }
+            if let Some(reactor) = image.definition_reactor_handle.filter(|r| {
+                !r.is_null()
+                    && matches!(
+                        self.objects.get(r),
+                        Some(ObjectType::ImageDefinitionReactor(_))
+                    )
+            }) {
+                if !reactors.contains(&reactor) {
+                    reactors.push(reactor);
+                }
+            }
+        }
+        reactors
+    }
+
+    /// The reactors the RASTERVARIABLES object lists: its owner, the named
+    /// object dictionary (DXF Reference, RASTERVARIABLES), unless a DWG read
+    /// kept others.
+    pub(crate) fn raster_variables_reactors(
+        &self,
+        variables: &crate::objects::RasterVariables,
+    ) -> Vec<Handle> {
+        if let Some(saved) = self.reactors_by_handle.get(&variables.handle) {
+            return saved.clone();
+        }
+        if variables.owner.is_null() {
+            Vec::new()
+        } else {
+            vec![variables.owner]
+        }
     }
 
     pub fn extension_dictionary_handle(&self, owner: Handle) -> Option<Handle> {
@@ -4946,11 +5088,7 @@ impl CadDocument {
             let EntityType::LwPolyline(polyline) = entity else {
                 continue;
             };
-            if polyline
-                .vertices
-                .iter()
-                .any(|vertex| vertex.vertex_id != 0)
-            {
+            if polyline.vertices.iter().any(|vertex| vertex.vertex_id != 0) {
                 continue;
             }
             let Some(edge_list) = edges.get(&polyline.common.handle.value()) else {
@@ -6275,6 +6413,36 @@ impl CadDocument {
         self.resolve_xrecord_names();
         self.resolve_table_style_names();
         self.resolve_xrecord_backed_properties();
+        if let Some(s) = self
+            .text_styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&self.header.current_text_style_name))
+        {
+            let is_default_name = self.header.current_text_style_name.eq_ignore_ascii_case("Standard");
+            let handle_is_valid_custom = !self.header.current_text_style_handle.is_null()
+                && self
+                    .text_styles
+                    .iter()
+                    .any(|t| t.handle == self.header.current_text_style_handle && !t.name.eq_ignore_ascii_case("Standard"));
+            if !is_default_name || !handle_is_valid_custom {
+                self.header.current_text_style_handle = s.handle;
+            }
+        }
+        if let Some(s) = self
+            .dim_styles
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&self.header.current_dimstyle_name))
+        {
+            let is_default_name = self.header.current_dimstyle_name.eq_ignore_ascii_case("Standard");
+            let handle_is_valid_custom = !self.header.current_dimstyle_handle.is_null()
+                && self
+                    .dim_styles
+                    .iter()
+                    .any(|d| d.handle == self.header.current_dimstyle_handle && !d.name.eq_ignore_ascii_case("Standard"));
+            if !is_default_name || !handle_is_valid_custom {
+                self.header.current_dimstyle_handle = s.handle;
+            }
+        }
         self.header.handle_seed = self.header.handle_seed.max(self.next_handle);
     }
 

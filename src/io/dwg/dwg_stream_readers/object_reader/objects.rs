@@ -12,7 +12,7 @@ use crate::objects::{
     NamedTableCellStyle, ProxyObjectReference, ProxyReferenceKind, RowCellStyle,
     TableBorderPropertyFlags, TableBorderType, TableCellBorder, TableCellStyleData,
     TableContentFormat, TableGridFormat, TableStyle, VisualStyle, VisualStyleProperty,
-    VisualStylePropertyValue, XRecordEntry, XRecordValue,
+    VisualStylePropertyValue, XRecordEntry, XRecordValue, XRecordValueType,
 };
 use crate::types::{Color, DxfVersion, Vector2, Vector3};
 use crate::types::{Handle, LineWeight};
@@ -1449,29 +1449,14 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> (Vec<XRecordEntry>, bool
         }
         let code = read_u16(position) as i16 as i32;
         position += 2;
-        let value = match code {
-            code if code < 0
-                || code == 5
-                || code == 105
-                || (320..=369).contains(&code)
-                || (390..=399).contains(&code)
-                || (480..=481).contains(&code)
-                || code == 1005 =>
-            {
+        let value = match XRecordValueType::from_code(code) {
+            XRecordValueType::Handle | XRecordValueType::ObjectId => {
                 require!(8);
                 let value = u64::from_le_bytes(raw[position..position + 8].try_into().unwrap());
                 position += 8;
                 XRecordValue::Handle(Handle::from(value))
             }
-            0..=4
-            | 6..=9
-            | 100..=102
-            | 300..=309
-            | 410..=419
-            | 430..=439
-            | 470..=479
-            | 999
-            | 1000..=1003 => {
+            XRecordValueType::String => {
                 require!(2);
                 let length = read_u16(position) as usize;
                 position += 2;
@@ -1487,16 +1472,18 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> (Vec<XRecordEntry>, bool
                     require!(1usize.saturating_add(length));
                     let code_page = raw[position] as u16;
                     position += 1;
-                    let value = crate::io::dxf::code_page::encoding_from_dwg_code_page(code_page)
+                    let encoding =
+                        crate::io::dxf::code_page::encoding_from_dwg_code_page(code_page);
+                    let value = encoding
                         .decode(&raw[position..position + length])
                         .0
                         .into_owned();
                     position += length;
-                    crate::io::dxf::code_page::decode_legacy_escapes(&value)
+                    crate::io::dxf::code_page::decode_legacy_escapes_in(&value, encoding)
                 };
                 XRecordValue::String(text)
             }
-            10..=37 | 110..=139 | 210..=269 | 1010..=1039 | 1043..=1069 => {
+            XRecordValueType::Point3D => {
                 require!(24);
                 let x = f64::from_le_bytes(raw[position..position + 8].try_into().unwrap());
                 let y = f64::from_le_bytes(raw[position + 8..position + 16].try_into().unwrap());
@@ -1504,43 +1491,43 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> (Vec<XRecordEntry>, bool
                 position += 24;
                 XRecordValue::Point3D(x, y, z)
             }
-            38..=59 | 140..=149 | 460..=469 | 1040..=1042 => {
+            XRecordValueType::Double => {
                 require!(8);
                 let value = f64::from_le_bytes(raw[position..position + 8].try_into().unwrap());
                 position += 8;
                 XRecordValue::Double(value)
             }
-            150..=169 => {
+            XRecordValueType::Int64 => {
                 require!(8);
                 let value = i64::from_le_bytes(raw[position..position + 8].try_into().unwrap());
                 position += 8;
                 XRecordValue::Int64(value)
             }
-            60..=79 | 170..=179 | 270..=279 | 370..=389 | 400..=409 | 1070 => {
+            XRecordValueType::Int16 => {
                 require!(2);
                 let value = i16::from_le_bytes(raw[position..position + 2].try_into().unwrap());
                 position += 2;
                 XRecordValue::Int16(value)
             }
-            80..=99 | 420..=429 | 440..=459 | 1071 => {
+            XRecordValueType::Int32 => {
                 require!(4);
                 let value = i32::from_le_bytes(raw[position..position + 4].try_into().unwrap());
                 position += 4;
                 XRecordValue::Int32(value)
             }
-            280..=289 => {
+            XRecordValueType::Byte => {
                 require!(1);
                 let value = raw[position];
                 position += 1;
                 XRecordValue::Byte(value)
             }
-            290..=299 => {
+            XRecordValueType::Bool => {
                 require!(1);
                 let value = raw[position] != 0;
                 position += 1;
                 XRecordValue::Bool(value)
             }
-            310..=319 | 1004 => {
+            XRecordValueType::Chunk => {
                 require!(1);
                 let length = raw[position] as usize;
                 position += 1;
@@ -1549,7 +1536,7 @@ fn decode_xrecord_entries(raw: &[u8], unicode: bool) -> (Vec<XRecordEntry>, bool
                 position += length;
                 XRecordValue::Chunk(value)
             }
-            _ => {
+            XRecordValueType::Unknown => {
                 position = entry_start;
                 complete = false;
                 break;
@@ -2056,6 +2043,53 @@ mod tests {
         let xr = read_xrecord(&mut r);
         assert_eq!(xr.cloning_flags, 0);
         assert_eq!(xr.data_size, 0);
+    }
+
+    #[test]
+    fn xrecord_native_payloads_distinguish_string_handles_from_object_ids() {
+        // Native AutoCAD 2027 payloads, including string handles that the old
+        // generic resbuf classification consumed as eight-byte integers.
+        let samples: &[(&[u8], bool)] = &[
+            (
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/xrecord/autocad_2027_r2000_databytes.bin"
+                )),
+                false,
+            ),
+            (
+                include_bytes!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/xrecord/autocad_2027_r2018_databytes.bin"
+                )),
+                true,
+            ),
+        ];
+        let expected = vec![
+            XRecordEntry::string(5, "abc"),
+            XRecordEntry::string(105, "abc"),
+            XRecordEntry::string(320, "abc"),
+            XRecordEntry::string(329, "abc"),
+            XRecordEntry::handle(330, Handle::from(12)),
+            XRecordEntry::handle(390, Handle::from(12)),
+            XRecordEntry::int16(70, 7),
+            XRecordEntry::new(289, XRecordValue::Byte(7)),
+            XRecordEntry::bool(290, true),
+            XRecordEntry::new(310, XRecordValue::Chunk(vec![0xab])),
+            XRecordEntry::point3d(10, 1.0, 2.0, 3.0),
+            XRecordEntry::double(40, 7.0),
+        ];
+        for &(raw, unicode) in samples {
+            let (entries, complete) = decode_xrecord_entries(raw, unicode);
+            assert!(complete, "unicode={unicode}");
+            assert_eq!(entries, expected, "unicode={unicode}");
+
+            // A partial final double may not be silently accepted as a fully
+            // decoded payload; its raw bytes must remain available to callers.
+            let (entries, complete) = decode_xrecord_entries(&raw[..raw.len() - 1], unicode);
+            assert!(!complete);
+            assert_eq!(entries, expected[..expected.len() - 1]);
+        }
     }
 
     #[test]

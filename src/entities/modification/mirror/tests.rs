@@ -1732,7 +1732,7 @@ pub(crate) fn assert_native_case(case: NativeMirrorCase) -> Result<(), String> {
     }
 }
 
-// Captured with AutoCAD 2027 (ACADVER 26.0), native MIRROR/MIRROR3D, 2026-10-18.
+// Captured with ACAD 2027 (ACADVER 26.0), native MIRROR/MIRROR3D, 2026-10-18.
 // Fixtures are semantic DXF records; unstable database identities are omitted.
 
 const NATIVE_MIRROR_CASES: &[NativeMirrorCase] = &[
@@ -2451,7 +2451,7 @@ fn native_polygon_mesh_closure_and_surface_fit_modes_survive_mirror() {
         (PolygonMeshFlags::CURVE_FIT, SurfaceSmoothType::Bezier),
     ];
     // Native POLYMESH MIRROR cases use the world Y axis as the mirror line;
-    // AutoCAD reverses each stored M row for this reflection.
+    // ACAD reverses each stored M row for this reflection.
     let first = Vector3::ZERO;
     let second = Vector3::UNIT_Y;
     let transform = Transform::from_mirror_line(first, second);

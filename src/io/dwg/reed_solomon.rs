@@ -14,7 +14,7 @@
 //! error correction is performed by our reader).
 //!
 //! On encode, real GF(2^8) parity bytes are computed so that other readers
-//! (AutoCAD, ODA) can verify and error-correct the data.
+//! (ACAD, ODA) can verify and error-correct the data.
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -694,87 +694,96 @@ mod tests {
         }
     }
 
-    // ── Cross-validation against LibreDWG's reference implementation ─────
+    // ODA §5.13 gives the two fields and code sizes. Check the implementation
+    // using polynomial arithmetic without its exp/log tables or encoder.
 
-    #[test]
-    fn test_gf_exp_table_matches_libredwg_f256_power() {
-        // LibreDWG's f256_power[] table (first 32 entries) for polynomial 0x169.
-        // Source: LibreDWG/src/reedsolomon.c
-        let libredwg_power: [u8; 32] = [
-            0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x69, 0xd2, 0xcd, 0xf3, 0x8f, 0x77,
-            0xee, 0xb5, 0x03, 0x06, 0x0c, 0x18, 0x30, 0x60, 0xc0, 0xe9, 0xbb, 0x1f, 0x3e, 0x7c,
-            0xf8, 0x99, 0x5b, 0xb6,
-        ];
-
-        let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
-        for i in 0..32 {
-            assert_eq!(
-                gf.exp[i], libredwg_power[i],
-                "exp[{}]: ours={:#04x} vs LibreDWG={:#04x}",
-                i, gf.exp[i], libredwg_power[i]
-            );
-        }
-    }
-
-    #[test]
-    fn test_generator_poly_matches_libredwg_rsgen() {
-        // LibreDWG's rsgen[] for RS(255,239) with polynomial 0x169, FCR=1.
-        // Source: LibreDWG/src/reedsolomon.c
-        // Their coefficients are in ascending degree order (rsgen[0]=constant term).
-        let libredwg_rsgen: [u8; 17] = [
-            0x6a, 0xe3, 0x63, 0x1f, 0xa1, 0x24, 0x9e, 0x44, 0x13, 0x1e, 0x2f, 0xfc, 0xfd, 0xce,
-            0xa9, 0xdb, 0x01,
-        ];
-
-        let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
-        let gen = rs_generator_poly(RS_SYSTEM_PARITY, 1, &gf);
-        // Our gen is in descending degree order: gen[0]=1 (x^16), gen[16]=constant.
-        // LibreDWG's rsgen is ascending: rsgen[0]=constant, rsgen[16]=1 (x^16).
-        // So gen[i] should equal libredwg_rsgen[16 - i].
-        assert_eq!(gen.len(), 17);
-        for i in 0..17 {
-            assert_eq!(
-                gen[i],
-                libredwg_rsgen[16 - i],
-                "gen[{}] (x^{} coeff): ours={:#04x} vs LibreDWG rsgen[{}]={:#04x}",
-                i,
-                16 - i,
-                gen[i],
-                16 - i,
-                libredwg_rsgen[16 - i]
-            );
-        }
-    }
-
-    #[test]
-    fn test_encode_parity_matches_libredwg_convention() {
-        // Verify that our encoder produces the same parity bytes as LibreDWG
-        // would for a simple test vector, by checking the codeword is valid
-        // under the same syndrome evaluation used by LibreDWG's rs_decode_block:
-        //   synbuf[j] = evaluate(blk, 255, f256_power[j + 1])  for j=0..15
-        // This evaluates the codeword polynomial at α^1, α^2, ..., α^16 (FCR=1).
-        let gf = GfTables::new(RS_SYSTEM_PRIM_POLY);
-        let nsym = RS_SYSTEM_PARITY;
-        let gen = rs_generator_poly(nsym, 1, &gf);
-
-        // Test vector: first 239 bytes = 0x01, 0x02, ..., 0xEF
-        let data: Vec<u8> = (1..=RS_SYSTEM_K as u8).collect();
-        let cw = rs_encode_block(&data, nsym, &gen, &gf);
-
-        // Verify syndromes at α^1 through α^16 (matching LibreDWG's FCR=1 convention).
-        for j in 0..16usize {
-            let root = gf.exp[j + 1]; // α^(j+1)
-                                      // Evaluate codeword polynomial at root (Horner's method, MSB-first).
-            let mut val: u8 = 0;
-            for &byte in cw.iter() {
-                val = gf.mul(val, root) ^ byte;
+    fn polynomial_product(a: u8, b: u8, modulus: u16) -> u8 {
+        let mut product = 0u16;
+        for bit in 0..8 {
+            if b & (1 << bit) != 0 {
+                product ^= (a as u16) << bit;
             }
-            assert_eq!(
-                val,
-                0,
-                "LibreDWG-compatible syndrome at α^{} must be 0",
-                j + 1
-            );
+        }
+        for degree in (8..=14).rev() {
+            if product & (1 << degree) != 0 {
+                product ^= modulus << (degree - 8);
+            }
+        }
+        product as u8
+    }
+
+    fn polynomial_power(exponent: usize, modulus: u16) -> u8 {
+        (0..exponent).fold(1, |value, _| polynomial_product(value, 2, modulus))
+    }
+
+    #[test]
+    fn field_tables_match_binary_polynomial_arithmetic() {
+        for modulus in [RS_DATA_PRIM_POLY, RS_SYSTEM_PRIM_POLY] {
+            let gf = GfTables::new(modulus);
+            for a in 0..=255u8 {
+                for b in 0..=255u8 {
+                    assert_eq!(gf.mul(a, b), polynomial_product(a, b, modulus));
+                }
+            }
+            let mut powers = std::collections::HashSet::new();
+            for exponent in 0..RS_N {
+                let power = polynomial_power(exponent, modulus);
+                assert_eq!(gf.exp[exponent], power);
+                assert!(powers.insert(power), "field generator must have order 255");
+            }
+            assert_eq!(polynomial_power(RS_N, modulus), 1);
+        }
+    }
+
+    #[test]
+    fn generators_have_the_dwg_page_roots() {
+        for (k, modulus) in [
+            (RS_DATA_K, RS_DATA_PRIM_POLY),
+            (RS_SYSTEM_K, RS_SYSTEM_PRIM_POLY),
+        ] {
+            let generator = rs_generator_poly(RS_N - k, k, &GfTables::new(modulus));
+            assert_eq!(generator.len(), RS_N - k + 1);
+            assert_eq!(generator[0], 1);
+            for exponent in k..RS_N {
+                let root = polynomial_power(exponent, modulus);
+                let residue = generator.iter().fold(0, |value, &coefficient| {
+                    polynomial_product(value, root, modulus) ^ coefficient
+                });
+                assert_eq!(residue, 0, "generator root alpha^{exponent}");
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_pages_satisfy_independent_syndrome_checks() {
+        // Exercise the public encoder at the production FCR (= k), including
+        // deinterleaving. The oracle uses neither production lookup tables nor
+        // its parity shift register. A single corrupted parity bit must fail.
+        for (k, modulus) in [
+            (RS_DATA_K, RS_DATA_PRIM_POLY),
+            (RS_SYSTEM_K, RS_SYSTEM_PRIM_POLY),
+        ] {
+            let factor = 3;
+            let data: Vec<_> = (0..factor * k).map(|i| (i * 37 + 11) as u8).collect();
+            let mut encoded = vec![0; factor * RS_N];
+            reed_solomon_encode(&data, &mut encoded, factor, k, modulus);
+            for stream in 0..factor {
+                for i in 0..k {
+                    assert_eq!(encoded[i * factor + stream], data[stream * k + i]);
+                }
+                for exponent in k..RS_N {
+                    let root = polynomial_power(exponent, modulus);
+                    let syndrome = |bytes: &[u8]| {
+                        (0..RS_N).fold(0, |value, i| {
+                            polynomial_product(value, root, modulus) ^ bytes[i * factor + stream]
+                        })
+                    };
+                    assert_eq!(syndrome(&encoded), 0);
+                    encoded[k * factor + stream] ^= 1;
+                    assert_ne!(syndrome(&encoded), 0);
+                    encoded[k * factor + stream] ^= 1;
+                }
+            }
         }
     }
 }

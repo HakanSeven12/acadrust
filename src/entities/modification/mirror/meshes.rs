@@ -55,7 +55,7 @@ pub(crate) fn mirror_polygon_mesh(e: &mut PolygonMeshEntity, transform: &Transfo
     }
     let reflecting = transform::is_reflecting(transform);
     transform::transform_polygon_mesh(e, transform);
-    // POLYMESH stores its grid in M-major rows. AutoCAD reverses each M row
+    // POLYMESH stores its grid in M-major rows. ACAD reverses each M row
     // under a reflection so the smoothing surface and closure seams retain
     // their geometric edge ownership.
     if reflecting && e.m_vertex_count > 0 {

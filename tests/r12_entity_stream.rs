@@ -10,8 +10,8 @@ use acadrust::io::dwg::r12::header::{
 use acadrust::{CadDocument, DwgReader, DwgWriter, DxfVersion, EntityType, Handle, Vector3};
 
 // Entity bytes are assembled independently of the native encoder. Field
-// widths and JUMP's section-relative address/early CRC follow the CC0 KSY
-// and LibreDWG's JUMP specification.
+// widths and JUMP's section-relative address/early CRC follow the CC0
+// Kaitai Struct schema for the R12 entity stream.
 fn frame(kind: u8, flags: u8, options: u16, handle: u8, body: &[u8]) -> Vec<u8> {
     let mut bytes = vec![kind, flags | 32, 0, 0, 0, 0];
     bytes.extend_from_slice(&options.to_le_bytes());

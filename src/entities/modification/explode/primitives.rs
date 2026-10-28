@@ -129,7 +129,7 @@ pub(super) fn explode_circle(circle: &Circle) -> Vec<EntityType> {
 }
 
 pub(super) fn explode_ellipse(ellipse: &Ellipse) -> Vec<EntityType> {
-    // Approximate the ellipse as a spline (same approach AutoCAD uses).
+    // Approximate the ellipse as a spline (same approach ACAD uses).
     let a = ellipse.major_axis_length();
     let b = ellipse.minor_axis_length();
     if a < 1e-10 {

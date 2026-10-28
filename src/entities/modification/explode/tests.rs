@@ -266,7 +266,7 @@ fn test_explode_standard_mline_emits_style_elements() {
     assert!(ys.contains(&0.5) && ys.contains(&-0.5));
 }
 
-/// A callout the way AutoCAD stores it: the leader line holds only the
+/// A callout the way ACAD stores it: the leader line holds only the
 /// arrow tip, the root holds the bend (connection point) and the landing.
 fn callout(tips: &[Vector3]) -> MultiLeader {
     let mut ml = MultiLeader::new();

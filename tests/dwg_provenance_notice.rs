@@ -9,22 +9,23 @@ fn includes_acadsharp_mit_attribution_and_license_terms() {
         "The above copyright notice and this permission notice",
         "THE SOFTWARE IS PROVIDED \"AS IS\"",
     ] {
-        assert!(NOTICES.contains(required), "missing notice text: {required}");
+        assert!(
+            NOTICES.contains(required),
+            "missing notice text: {required}"
+        );
     }
 }
 
 #[test]
-fn records_oda_and_reverse_engineering_as_primary_format_sources() {
+fn records_oda_and_native_cad_files_as_format_evidence() {
     for required in [
-        "Open Design Alliance (ODA)",
-        "specification and reverse engineering",
-        "reverse engineering",
-        "LibreDWG",
-        "src/reedsolomon.c",
-        "those values are test data",
-        "translated routines.",
-        "no LibreDWG routines",
+        "Open Design Alliance (ODA) DWG specification",
+        "native DWG files produced by CAD",
+        "ACadSharp remains the attributed origin",
     ] {
-        assert!(NOTICES.contains(required), "missing provenance text: {required}");
+        assert!(
+            NOTICES.contains(required),
+            "missing provenance text: {required}"
+        );
     }
 }

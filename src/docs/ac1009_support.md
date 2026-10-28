@@ -33,7 +33,7 @@ Fixed-width header strings that cannot fit after re-encoding return an error
 instead of silently truncating text or splitting a legacy escape.
 
 Synthesized Model/Layout1 layouts receive the plot flags, plot area, scale,
-and shade resolution observed in AutoCAD imports. Printer and paper choices
+and shade resolution observed in ACAD imports. Printer and paper choices
 remain application-profile settings. Regression coverage includes both handle
 storage modes. CAD-created viewport validation is reproducible from the
 BricsCAD script, but its DWG binary is not checked in.
@@ -55,14 +55,14 @@ silently wrapping.
 | Area | Implemented Behavior | Evidence |
 | --- | --- | --- |
 | JUMP framing | CRC at bytes 8-9, before padding; unsigned addresses | Independent bytes, corruption and padding cases |
-| Stream traversal | Reassembles model-space and BLOCK-owned POLYLINE/INSERT children across extras; removes control markers | Full DWG fixtures, tagged-owner fixture, three saves, AutoCAD geometry checks |
-| Address validation | Absolute main-file return addresses and flagged section offsets; exact record boundaries | AutoCAD-verified return markers; cycle, orphan, owner and boundary failures |
-| Import handles | Allocates in original native import order after logical reassembly | Existing independent AutoCAD identity regressions |
-| SHAPE | Retains number and STYLE identity, including duplicate unnamed styles; correct native STYLE flag bits | Independent SHAPE bytes, typed edits, AutoCAD resolves BOX from ltypeshp.shx |
+| Stream traversal | Reassembles model-space and BLOCK-owned POLYLINE/INSERT children across extras; removes control markers | Full DWG fixtures, tagged-owner fixture, three saves, ACAD geometry checks |
+| Address validation | Absolute main-file return addresses and flagged section offsets; exact record boundaries | ACAD-verified return markers; cycle, orphan, owner and boundary failures |
+| Import handles | Allocates in original native import order after logical reassembly | Existing independent ACAD identity regressions |
+| SHAPE | Retains number and STYLE identity, including duplicate unnamed styles; correct native STYLE flag bits | Independent SHAPE bytes, typed edits, ACAD resolves BOX from ltypeshp.shx |
 | Entity viewport references | Retains unsigned references on entities and ordered compound children | Zero/65535, attribute reordering, vertex addition and serde cases |
 | Header retention | Preserves all 18 unmapped header spans through native saves | Independent 204/205 layouts, three saves and typed edits |
 | MENU | Joins/splits the 15/45-byte fields, up to 60 encoded bytes | Multibyte/CIF boundaries, stale continuation, NUL/overflow failures |
-| Native output | Valid empty-table framing and header defaults; omits synthesized system records; HANDSEED exceeds stored child handles | AutoCAD opening and AUDIT without repairs |
+| Native output | Valid empty-table framing and header defaults; omits synthesized system records; HANDSEED exceeds stored child handles | ACAD opening and AUDIT without repairs |
 
 The positive full-drawing fixtures are exported by:
 
@@ -73,7 +73,7 @@ pwsh -NoProfile -File tests/bcad/run_r12_native.ps1 -SkipGenerate
 
 The generator reuses the exact entity-stream builders from the Rust tests.
 It writes seven AC1009 files, including original JUMP layouts and native saves,
-to `target/ac1009-native`. The SHAPE case uses AutoCAD's installed
+to `target/ac1009-native`. The SHAPE case uses ACAD's installed
 `ltypeshp.shx`; no proprietary font is copied into the repository. The native
 harness opens copies in separate Core Console processes, checks geometry and
 ownership, runs AUDIT with repairs disabled, and fails on import recovery,
@@ -111,7 +111,7 @@ Native source files exposed and now cover:
   standard DXF header representation; view/snap/grid data in DXF are retained
   through the existing VPORT records.
 
-All seven source DWGs and all seven acadrust resaves opened cleanly in AutoCAD
+All seven source DWGs and all seven acadrust resaves opened cleanly in ACAD
 2027 and completed AUDIT with zero errors and no repairs during the recorded
 validation run. The scripts and per-case checks are reproducible:
 
@@ -128,7 +128,7 @@ legacy geometry/state checks and AUDIT, and writes `bricscad-results.json`.
 ## Remaining Limits
 
 - **Block-owned extra streams.** The section walker has deterministic
-  structural tests for block continuations, but AutoCAD rejects the fabricated
+  structural tests for block continuations, but ACAD rejects the fabricated
   block/JUMP arrangement used to explore that branch. Native validity of that
   layout is not claimed. The exported block fixture uses contiguous records;
   additional native drawings are needed to establish actual relocated-block

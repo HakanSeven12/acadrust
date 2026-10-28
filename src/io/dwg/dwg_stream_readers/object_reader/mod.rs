@@ -146,6 +146,15 @@ pub struct DwgObjectReader {
     mesh_budget: MeshFaceBudget,
 }
 
+/// Entity visibility in the DWG common-entity bit-short.
+///
+/// Bit 0 is the visibility flag (DXF group 60). AutoCAD stores other bits
+/// on visible entities — value 2 is common on attributes — and still draws
+/// them. DXF group 60 is not this field: any non-zero group is invisible.
+pub(crate) fn dwg_entity_invisible(raw: i16) -> bool {
+    raw & 1 != 0
+}
+
 impl DwgObjectReader {
     /// Create a new object reader.
     ///
@@ -588,11 +597,11 @@ impl DwgObjectReader {
         // Linetype scale
         let linetype_scale = reader.read_bit_double();
 
-        // R13-R14: invisibility + return early
-        // DXF group 60 convention (all DWG versions): 0 = visible, non-zero = invisible
+        // R13-R14: invisibility + return early.
+        // Only bit 0 hides the entity (issue #175).
         let invisible;
         if self.version.r13_14_only() {
-            invisible = reader.read_bit_short() != 0;
+            invisible = dwg_entity_invisible(reader.read_bit_short());
             return EntityCommonData {
                 common,
                 has_graphic,
@@ -637,7 +646,9 @@ impl DwgObjectReader {
             linetype_handle = reader.read_handle();
         }
 
-        // R2007+: material flags + shadow flags
+        // Native reC/b2007..b2018: material BB + shadow RC precede plotstyle
+        // BB in DATA. ODA §20.4.1 lists plotstyle earlier; its §20.4.2 handle
+        // order (material then plotstyle) agrees with these native records.
         let mut material_flags = 0u8;
         let mut material_handle: Option<u64> = None;
         let mut shadow_flags = 0u8;
@@ -677,8 +688,8 @@ impl DwgObjectReader {
             }
         }
 
-        // Invisibility
-        invisible = reader.read_bit_short() != 0;
+        // Invisibility. Only bit 0 hides the entity (issue #175).
+        invisible = dwg_entity_invisible(reader.read_bit_short());
 
         // R2000+: Lineweight (5-bit DWG index → raw byte value)
         let line_weight = if self.version.r2000_plus() {
@@ -927,6 +938,15 @@ fn read_modular_unsigned(data: &[u8], width: usize, payload_bits: u32) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dwg_invisibility_uses_only_bit_0() {
+        assert!(!dwg_entity_invisible(0));
+        assert!(dwg_entity_invisible(1));
+        // AutoCAD sample drawings store 2 on entities they still display.
+        assert!(!dwg_entity_invisible(2));
+        assert!(dwg_entity_invisible(3));
+    }
 
     #[test]
     fn test_modular_short_read() {

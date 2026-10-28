@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-/// Represents line weight in AutoCAD
+/// Represents line weight in ACAD
 ///
 /// Line weights are specified in millimeters (mm) or can be special values
 /// like ByLayer, ByBlock, or Default.

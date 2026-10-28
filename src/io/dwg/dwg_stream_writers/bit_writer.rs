@@ -423,57 +423,43 @@ impl DwgBitWriter {
 
     /// Write a bit-coded double with a default value (DD type).
     ///
-    /// Differential encoding that compares the value byte-by-byte with
-    /// a default value, writing only the differing bytes.
+    /// `value` is the number stored in the stream. `default` is the number the
+    /// reader already knows. Only the bytes that differ from `default` are written.
     ///
-    /// The first parameter `def` is the value to STORE in the stream.
-    /// The second parameter `value` is the REFERENCE (default) value
-    /// that the reader already knows. This matches the reference
-    /// parameter convention: `WriteBitDoubleWithDefault(double def, double value)`.
-    ///
-    /// | Case                            | 2-bit code | Data            |
-    /// |---------------------------------|-----------|-----------------|
-    /// | def == value                    | 00 (0)    | nothing         |
-    /// | last 4 bytes match (4,5,6,7)    | 01 (1)    | 4 bytes (0..4)  |
-    /// | last 2 bytes match (6,7)        | 10 (2)    | 6 bytes         |
-    /// | otherwise                       | 11 (3)    | 8 bytes (full)  |
-    pub fn write_bit_double_with_default(&mut self, def: f64, value: f64) {
-        if def == value {
-            self.write_2bits(0); // Use default — no data
+    /// | Case                         | 2-bit code | Data                 |
+    /// |------------------------------|------------|----------------------|
+    /// | `value == default`           | 00         | nothing              |
+    /// | last 4 bytes match           | 01         | value bytes 0..4     |
+    /// | last 2 bytes match           | 10         | value bytes 4..6, 0..4 |
+    /// | otherwise                    | 11         | full little-endian f64 |
+    pub fn write_bit_double_with_default(&mut self, value: f64, default: f64) {
+        if value == default {
+            self.write_2bits(0);
             return;
         }
 
-        let def_bytes = def.to_le_bytes();
-        let val_bytes = value.to_le_bytes();
-
-        // Count matching bytes from the end inward (C# "symmetry" loop)
-        let mut matching_from_end = 0i32;
-        let mut last = 7i32;
-        while last >= 0 && def_bytes[last as usize] == val_bytes[last as usize] {
-            matching_from_end += 1;
-            last -= 1;
-        }
+        let value_bytes = value.to_le_bytes();
+        let default_bytes = default.to_le_bytes();
+        let matching_from_end = value_bytes
+            .iter()
+            .rev()
+            .zip(default_bytes.iter().rev())
+            .take_while(|(stored, known)| stored == known)
+            .count();
 
         if matching_from_end >= 4 {
-            // 01: bytes 4,5,6,7 match — write def bytes 0,1,2,3
             self.write_2bits(1);
-            self.write_byte(def_bytes[0]);
-            self.write_byte(def_bytes[1]);
-            self.write_byte(def_bytes[2]);
-            self.write_byte(def_bytes[3]);
+            for byte in &value_bytes[..4] {
+                self.write_byte(*byte);
+            }
         } else if matching_from_end >= 2 {
-            // 10: bytes 6,7 match — write def bytes 4,5 then 0,1,2,3
             self.write_2bits(2);
-            self.write_byte(def_bytes[4]);
-            self.write_byte(def_bytes[5]);
-            self.write_byte(def_bytes[0]);
-            self.write_byte(def_bytes[1]);
-            self.write_byte(def_bytes[2]);
-            self.write_byte(def_bytes[3]);
+            for index in [4, 5, 0, 1, 2, 3] {
+                self.write_byte(value_bytes[index]);
+            }
         } else {
-            // 11: no match — write full double
             self.write_2bits(3);
-            self.write_raw_double(def);
+            self.write_raw_double(value);
         }
     }
 
@@ -508,16 +494,20 @@ impl DwgBitWriter {
     }
 
     /// Write two bit-doubles with defaults (2DD type).
-    pub fn write_2bit_double_with_default(&mut self, def: Vector2, value: Vector2) {
-        self.write_bit_double_with_default(def.x, value.x);
-        self.write_bit_double_with_default(def.y, value.y);
+    ///
+    /// `value` is stored. `default` is what the reader already knows.
+    pub fn write_2bit_double_with_default(&mut self, value: Vector2, default: Vector2) {
+        self.write_bit_double_with_default(value.x, default.x);
+        self.write_bit_double_with_default(value.y, default.y);
     }
 
     /// Write three bit-doubles with defaults (3DD type).
-    pub fn write_3bit_double_with_default(&mut self, def: Vector3, value: Vector3) {
-        self.write_bit_double_with_default(def.x, value.x);
-        self.write_bit_double_with_default(def.y, value.y);
-        self.write_bit_double_with_default(def.z, value.z);
+    ///
+    /// `value` is stored. `default` is what the reader already knows.
+    pub fn write_3bit_double_with_default(&mut self, value: Vector3, default: Vector3) {
+        self.write_bit_double_with_default(value.x, default.x);
+        self.write_bit_double_with_default(value.y, default.y);
+        self.write_bit_double_with_default(value.z, default.z);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -721,7 +711,9 @@ impl DwgBitWriter {
         self.write_en_color_with_book(color, transparency, false);
     }
 
-    /// Write entity color with transparency and optional book color flag.
+    /// Write ODA §2.11 ENC, with the BL ordering observed in native AutoCAD
+    /// probes (reC/a2004..a2018). Book colors carry an ACI fallback in the word
+    /// and their RGB through a separate DBCOLOR handle, never an inline BL.
     pub fn write_en_color_with_book(
         &mut self,
         color: &Color,
@@ -729,56 +721,31 @@ impl DwgBitWriter {
         is_book_color: bool,
     ) {
         if !self.version.supports_true_color() {
-            // R13–R2000: Just CMC color
-            self.write_cm_color(color);
+            self.write_bit_short(color.approximate_index());
             return;
         }
 
-        // R2004+: Build flags bitfield
-        let mut flags: u16 = 0;
-        let is_true_color = matches!(color, Color::Rgb { .. });
-        let has_transparency = !transparency.is_by_layer();
-
-        // Autodesk writes book colors with both ENC color bits set.  The
-        // AcDbColor handle still supplies the RGB value, so no RGB BL follows.
-        if is_book_color {
-            flags |= 0xC000; // AcDbColor reference (handle written separately)
-                             // ENC still carries the ACI fallback in the low 13 bits. Omitting
-                             // it turns any indexed book color into ByBlock when the record is
-                             // read before (or without) resolving the AcDbColor object.
-            flags |= color.approximate_index() as u16 & 0x1FFF;
-        } else if is_true_color {
-            flags |= 0x8000; // Complex/true color follows
+        let packed_rgb = match color {
+            Color::Rgb { r, g, b } if !is_book_color => {
+                Some(0xC200_0000 | (u32::from(*r) << 16) | (u32::from(*g) << 8) | u32::from(*b))
+            }
+            _ => None,
+        };
+        let mut word = if is_book_color {
+            0xC000 | (color.approximate_index() as u16 & 0x1FFF)
+        } else if packed_rgb.is_some() {
+            0x8000
+        } else {
+            color.approximate_index() as u16 & 0x1FFF
+        };
+        if !transparency.is_by_layer() {
+            word |= 0x2000;
         }
-        if has_transparency {
-            flags |= 0x2000; // Transparency follows
+        self.write_bit_short(word as i16);
+        if let Some(packed) = packed_rgb {
+            self.write_bit_long(packed as i32);
         }
-
-        if !is_true_color && !is_book_color {
-            // Simple ACI color — include index in the flags BS
-            let index = color.approximate_index();
-            flags |= index as u16 & 0x1FFF;
-        }
-
-        self.write_bit_short(flags as i16);
-
-        // Field order matches the entity ENC encoding: the true-color rgb BL
-        // FIRST, then the transparency BL (book colors emit no rgb — it comes
-        // from the AcDbColor handle — but still emit the transparency last).
-        if is_true_color && !is_book_color {
-            let color_long = match color {
-                Color::Rgb { r, g, b } => {
-                    (*b as u32) | ((*g as u32) << 8) | ((*r as u32) << 16) | (0xC2u32 << 24)
-                }
-                Color::Index(idx) => (*idx as u32) | (0xC3u32 << 24),
-                Color::ByLayer => 0xC0u32 << 24,
-                Color::None => 0xC8u32 << 24,
-                Color::ByBlock => 0xC3u32 << 24,
-            };
-            self.write_bit_long(color_long as i32);
-        }
-
-        if has_transparency {
+        if word & 0x2000 != 0 {
             self.write_bit_long(transparency.to_alpha_value());
         }
     }

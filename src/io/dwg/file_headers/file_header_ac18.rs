@@ -51,7 +51,7 @@ const INNER_HEADER_ID: &[u8; 12] = b"AcFssFcAJMB\0";
 pub struct DwgFileHeaderWriterAC18 {
     /// DXF version being written.
     version: DxfVersion,
-    /// AutoCAD maintenance release version (preserved from source file).
+    /// ACAD maintenance release version (preserved from source file).
     maintenance_version: u8,
     /// Compact DWG code-page index.
     code_page: u16,

@@ -93,7 +93,7 @@ pub struct ImageDefinition {
     pub is_loaded: bool,
     /// Image size in pixels (width, height) (DXF codes 10, 20)
     pub size_in_pixels: (u32, u32),
-    /// Pixel size in AutoCAD units (width, height) (DXF codes 11, 21)
+    /// Pixel size in ACAD units (width, height) (DXF codes 11, 21)
     pub pixel_size: (f64, f64),
     /// Resolution unit (DXF code 281)
     pub resolution_unit: ResolutionUnit,

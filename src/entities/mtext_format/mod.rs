@@ -1,6 +1,6 @@
 //! MTEXT format string parser and serializer.
 //!
-//! This module provides utilities for parsing AutoCAD MTEXT formatted strings
+//! This module provides utilities for parsing ACAD MTEXT formatted strings
 //! into a structured representation of paragraphs and styled text spans, and
 //! for serializing such structures back to MTEXT format strings.
 //!

@@ -538,6 +538,9 @@ mod tests {
         let mut contents = 108u32.to_le_bytes().to_vec();
         contents.extend_from_slice(&emf[..108]);
         contents.extend_from_slice(&emf);
-        assert_eq!(classify_metafile(&contents), Some(OlePresentation::Emf(emf)));
+        assert_eq!(
+            classify_metafile(&contents),
+            Some(OlePresentation::Emf(emf))
+        );
     }
 }
