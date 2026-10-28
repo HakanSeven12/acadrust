@@ -313,6 +313,25 @@ fn hatch_area_leaves_out_islands_by_style() {
         "100.0000"
     );
 
+    // Neighbouring outer loops that share an edge, drawn 3 mm apart, are not
+    // islands of each other; only the small loop inside the first one is.
+    let room = line_loop(
+        &[(0.0, 0.0), (4.0, 0.0), (4.0, 3.0), (0.0, 3.0)],
+        BoundaryPathFlags::EXTERNAL,
+    );
+    let niche = line_loop(
+        &[(0.0, 0.0), (1.2, 0.003), (1.2, -1.0), (0.0, -1.0)],
+        BoundaryPathFlags::EXTERNAL,
+    );
+    let column = line_loop(
+        &[(2.0, 1.0), (2.5, 1.0), (2.5, 1.5), (2.0, 1.5)],
+        BoundaryPathFlags::OUTERMOST,
+    );
+    assert_eq!(
+        hatch_area(&mut doc, vec![room, niche, column], HatchStyleType::Normal),
+        format!("{:.4}", 12.0 + 1.2 * (1.0 + 1.003) / 2.0 - 0.25)
+    );
+
     // A circular island, drawn clockwise as AutoCAD often stores islands.
     let mut hole = BoundaryPath::with_flags(BoundaryPathFlags::DEFAULT);
     hole.add_edge(BoundaryEdge::CircularArc(CircularArcEdge {
