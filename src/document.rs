@@ -4422,6 +4422,49 @@ impl CadDocument {
         }
     }
 
+    /// A table style's name is its key in the table style dictionary; the
+    /// record's own string is its description, empty for most styles. Each
+    /// row's text style is the one its handle points at.
+    pub fn resolve_table_style_names(&mut self) {
+        let names: HashMap<Handle, String> = self
+            .objects
+            .values()
+            .filter_map(|object| match object {
+                ObjectType::Dictionary(dictionary) => Some(dictionary.entries.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|(_, handle)| {
+                matches!(self.objects.get(handle), Some(ObjectType::TableStyle(_)))
+            })
+            .map(|(name, handle)| (*handle, name.clone()))
+            .collect();
+        let text_styles: HashMap<Handle, String> = self
+            .text_styles
+            .iter()
+            .map(|style| (style.handle, style.name.clone()))
+            .collect();
+        for (handle, object) in self.objects.iter_mut() {
+            let ObjectType::TableStyle(style) = object else {
+                continue;
+            };
+            if style.name.is_empty() {
+                if let Some(name) = names.get(handle) {
+                    style.name = name.clone();
+                }
+            }
+            for row in [
+                &mut style.data_row_style,
+                &mut style.header_row_style,
+                &mut style.title_row_style,
+            ] {
+                if let Some(name) = row.text_style_handle.and_then(|h| text_styles.get(&h)) {
+                    row.text_style_name = name.clone();
+                }
+            }
+        }
+    }
+
     /// Project typed properties whose authoritative storage is a named
     /// XRecord onto their public object models.
     pub fn resolve_xrecord_backed_properties(&mut self) {
@@ -6231,6 +6274,7 @@ impl CadDocument {
         }
         self.resolve_book_colors();
         self.resolve_xrecord_names();
+        self.resolve_table_style_names();
         self.resolve_xrecord_backed_properties();
         self.header.handle_seed = self.header.handle_seed.max(self.next_handle);
     }
