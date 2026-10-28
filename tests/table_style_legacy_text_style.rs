@@ -43,7 +43,9 @@ fn legacy_table_style_rows_resolve_text_style_from_name() {
     let source = from_dxf(&CadDocument::with_version(DxfVersion::AC1032));
     let standard = source.text_styles.get("Standard").expect("Standard").handle;
 
-    for version in [DxfVersion::AC1015, DxfVersion::AC1018, DxfVersion::AC1021] {
+    // R2000 has no TABLESTYLE class, so a cross-version save drops the
+    // object there; the three-row layout is R2004 and R2007.
+    for version in [DxfVersion::AC1018, DxfVersion::AC1021] {
         let mut document = source.clone();
         document.version = version;
         let bytes = DwgWriter::write_to_vec(&document).expect("write DWG");

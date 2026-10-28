@@ -125,6 +125,15 @@ fn imagedef_reactor_group_from_dxf_is_written_back() {
         .windows(4)
         .position(|w| w[1] == "IMAGEDEF" && w[3] == format!("{:X}", def.value()))
         .expect("IMAGEDEF record");
+    // The writer lists the reactors it derives for a definition without a
+    // list; replace that group with the file's own.
+    if lines[start + 5] == "{ACAD_REACTORS" {
+        let close = (start + 5..lines.len())
+            .step_by(2)
+            .find(|&k| lines[k] == "}")
+            .expect("reactor group end");
+        lines.drain(start + 4..close + 1);
+    }
     let group = [
         "102",
         "{ACAD_REACTORS",
@@ -173,21 +182,26 @@ fn imagedef_reactors_survive_dwg_round_trip() {
     assert_eq!(definition(&again, def).reactors, vec![reactor_handle]);
 }
 
+/// A definition whose list was emptied is written with the reactors the
+/// drawing gives it: its dictionary and each image's reactor.
 #[test]
-fn emptied_imagedef_reactors_stay_empty_after_dwg_load() {
-    let (doc, def, _, _) = image_document();
+fn emptied_imagedef_reactors_are_derived_after_dwg_load() {
+    let (doc, def, _, reactor_handle) = image_document();
     let mut loaded = dwg_round_trip(&doc);
     definition_mut(&mut loaded, def).reactors.clear();
     let again = dwg_round_trip(&loaded);
-    assert!(definition(&again, def).reactors.is_empty());
+    let owner = definition(&again, def).owner;
+    assert_eq!(definition(&again, def).reactors, vec![owner, reactor_handle]);
 }
 
 #[test]
-fn imagedef_without_reactors_stays_empty() {
-    let (mut doc, def, _, _) = image_document();
+fn imagedef_without_reactors_gets_derived_ones() {
+    let (mut doc, def, _, reactor_handle) = image_document();
     definition_mut(&mut doc, def).reactors.clear();
-    assert!(definition(&dwg_round_trip(&doc), def).reactors.is_empty());
-    assert!(definition(&dxf_round_trip(&doc), def).reactors.is_empty());
+    let owner = definition(&doc, def).owner;
+    let expected = vec![owner, reactor_handle];
+    assert_eq!(definition(&dwg_round_trip(&doc), def).reactors, expected);
+    assert_eq!(definition(&dxf_round_trip(&doc), def).reactors, expected);
 }
 
 #[test]
