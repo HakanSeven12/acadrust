@@ -2728,6 +2728,7 @@ impl DwgDocumentBuilder {
         }
 
         document.resolve_xrecord_names();
+        document.resolve_table_style_names();
 
         // Advanced material properties are not stored in the AcDbMaterial
         // object body. AutoCAD keeps them in the ADVMATERIAL XRECORD owned by

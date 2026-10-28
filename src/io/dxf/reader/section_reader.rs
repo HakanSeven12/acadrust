@@ -21422,7 +21422,10 @@ impl<'a> SectionReader<'a> {
                     }
                 }
                 3 => {
+                    // The record's own string is the description; the name
+                    // comes from the style dictionary once it is read.
                     ts.name = pair.value_string.clone();
+                    ts.description = pair.value_string.clone();
                     saw_name = true;
                 }
                 70 => {

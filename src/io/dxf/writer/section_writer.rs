@@ -8199,7 +8199,7 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         self.writer.write_handle(330, style.owner_handle)?;
         self.writer.write_subclass("AcDbTableStyle")?;
 
-        self.writer.write_string(3, &style.name)?;
+        self.writer.write_string(3, &style.description)?;
 
         // Flow direction
         self.writer.write_i16(70, style.flow_direction as i16)?;
