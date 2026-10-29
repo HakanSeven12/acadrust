@@ -38,13 +38,19 @@ pub fn decompress_ac21(source: &[u8], initial_offset: u32, length: u32, buffer: 
 
 /// Inner decompression loop — caller guarantees `buffer.len() >= 32`.
 fn decompress_ac21_inner(source: &[u8], initial_offset: u32, length: u32, buffer: &mut [u8]) {
+    if source.is_empty() || (initial_offset as usize) >= source.len() || length == 0 || buffer.is_empty() {
+        return;
+    }
     let mut source_offset: u32 = 0;
     let mut match_length: u32 = 0;
     let mut source_index = initial_offset;
     let mut op_code: u32 = source[source_index as usize] as u32;
 
     let mut dest_index: u32 = 0;
-    let end_index = source_index + length;
+    let end_index = match source_index.checked_add(length) {
+        Some(end) => end.min(source.len() as u32),
+        None => source.len() as u32,
+    };
 
     source_index += 1;
 
@@ -54,12 +60,15 @@ fn decompress_ac21_inner(source: &[u8], initial_offset: u32, length: u32, buffer
 
     // Handle initial opcode with upper nibble == 0x20
     if (op_code & 0xF0) == 0x20 {
+        if source_index + 3 > end_index {
+            return;
+        }
         source_index += 3;
         match_length = source[source_index as usize - 1] as u32;
         match_length &= 0x07;
     }
 
-    while source_index < end_index {
+    while source_index < end_index && (dest_index as usize) < buffer.len() {
         // Copy literal bytes
         if match_length == 0 {
             read_literal_length(source, &mut source_index, &mut op_code, &mut match_length);
@@ -73,7 +82,7 @@ fn decompress_ac21_inner(source: &[u8], initial_offset: u32, length: u32, buffer
             match_length,
         );
 
-        if source_index >= end_index {
+        if source_index >= end_index || (dest_index as usize) >= buffer.len() {
             break;
         }
 
@@ -99,7 +108,9 @@ fn decompress_ac21_inner(source: &[u8], initial_offset: u32, length: u32, buffer
 /// For 32-byte chunks: groups of 8 bytes are reversed in order.
 /// For sub-32 chunks: each length (1–31) has a specific reordering pattern.
 fn copy_literal(src: &[u8], src_index: &mut u32, dst: &mut [u8], dst_index: &mut u32, length: u32) {
-    let mut remaining = length;
+    let avail_src = src.len().saturating_sub(*src_index as usize) as u32;
+    let avail_dst = dst.len().saturating_sub(*dst_index as usize) as u32;
+    let mut remaining = length.min(avail_src).min(avail_dst);
 
     // Copy in chunks of 32 (with byte group reordering)
     while remaining >= 32 {
@@ -142,15 +153,14 @@ fn copy_decompressed_chunks(
     source_offset: &mut u32,
 ) -> u32 {
     *match_length = 0;
-    *op_code = src[*source_index as usize] as u32;
-    *source_index += 1;
+    *op_code = next_byte(src, source_index).unwrap_or(0);
 
     read_instructions(src, source_index, op_code, match_length, source_offset);
 
     loop {
         // Copy from already-decompressed data (back-reference)
         copy_back_reference(dst, dest_index, *match_length, *source_offset);
-        dest_index += *match_length;
+        dest_index = dest_index.saturating_add(*match_length);
 
         *match_length = *op_code & 0x07;
 
@@ -158,8 +168,7 @@ fn copy_decompressed_chunks(
             break;
         }
 
-        *op_code = src[*source_index as usize] as u32;
-        *source_index += 1;
+        *op_code = next_byte(src, source_index).unwrap_or(0);
 
         if (*op_code >> 4) == 0 {
             break;
@@ -175,6 +184,17 @@ fn copy_decompressed_chunks(
     dest_index
 }
 
+#[inline]
+fn next_byte(buffer: &[u8], source_index: &mut u32) -> Option<u32> {
+    let idx = *source_index as usize;
+    if idx < buffer.len() {
+        *source_index += 1;
+        Some(buffer[idx] as u32)
+    } else {
+        None
+    }
+}
+
 /// Decode instruction opcodes to determine match length and back-reference offset.
 fn read_instructions(
     buffer: &[u8],
@@ -186,39 +206,31 @@ fn read_instructions(
     match *op_code >> 4 {
         0 => {
             *length = (*op_code & 0x0F) + 0x13;
-            *source_offset = buffer[*source_index as usize] as u32;
-            *source_index += 1;
-            *op_code = buffer[*source_index as usize] as u32;
-            *source_index += 1;
+            *source_offset = next_byte(buffer, source_index).unwrap_or(0);
+            *op_code = next_byte(buffer, source_index).unwrap_or(0);
             *length = (*op_code >> 3 & 0x10) + *length;
             *source_offset = ((*op_code & 0x78) << 5) + 1 + *source_offset;
         }
         1 => {
             *length = (*op_code & 0x0F) + 3;
-            *source_offset = buffer[*source_index as usize] as u32;
-            *source_index += 1;
-            *op_code = buffer[*source_index as usize] as u32;
-            *source_index += 1;
+            *source_offset = next_byte(buffer, source_index).unwrap_or(0);
+            *op_code = next_byte(buffer, source_index).unwrap_or(0);
             *source_offset = ((*op_code & 0xF8) << 5) + 1 + *source_offset;
         }
         2 => {
-            *source_offset = buffer[*source_index as usize] as u32;
-            *source_index += 1;
-            *source_offset =
-                ((buffer[*source_index as usize] as u32) << 8 & 0xFF00) | *source_offset;
-            *source_index += 1;
+            let b0 = next_byte(buffer, source_index).unwrap_or(0);
+            let b1 = next_byte(buffer, source_index).unwrap_or(0);
+            *source_offset = (b1 << 8 & 0xFF00) | b0;
             *length = *op_code & 7;
 
             if (*op_code & 8) == 0 {
-                *op_code = buffer[*source_index as usize] as u32;
-                *source_index += 1;
+                *op_code = next_byte(buffer, source_index).unwrap_or(0);
                 *length = (*op_code & 0xF8) + *length;
             } else {
                 *source_offset += 1;
-                *length = ((buffer[*source_index as usize] as u32) << 3) + *length;
-                *source_index += 1;
-                *op_code = buffer[*source_index as usize] as u32;
-                *source_index += 1;
+                let b2 = next_byte(buffer, source_index).unwrap_or(0);
+                *length = (b2 << 3) + *length;
+                *op_code = next_byte(buffer, source_index).unwrap_or(0);
                 *length = ((*op_code & 0xF8) << 8) + *length + 0x100;
             }
         }
@@ -226,8 +238,7 @@ fn read_instructions(
             // Default: compact match (upper nibble 3–15)
             *length = *op_code >> 4;
             *source_offset = *op_code & 0x0F;
-            *op_code = buffer[*source_index as usize] as u32;
-            *source_index += 1;
+            *op_code = next_byte(buffer, source_index).unwrap_or(0);
             *source_offset = ((*op_code & 0xF8) << 1) + *source_offset + 1;
         }
     }
@@ -237,18 +248,16 @@ fn read_instructions(
 fn read_literal_length(buffer: &[u8], source_index: &mut u32, op_code: &mut u32, length: &mut u32) {
     *length = *op_code + 8;
     if *length == 0x17 {
-        let mut n = buffer[*source_index as usize] as u32;
-        *source_index += 1;
-        *length += n;
+        let mut n = next_byte(buffer, source_index).unwrap_or(0);
+        *length = length.saturating_add(n);
 
         if n == 0xFF {
             loop {
-                n = buffer[*source_index as usize] as u32;
-                *source_index += 1;
-                n |= (buffer[*source_index as usize] as u32) << 8;
-                *source_index += 1;
-                *length += n;
-                if n != 0xFFFF {
+                let lo = next_byte(buffer, source_index).unwrap_or(0);
+                let hi = next_byte(buffer, source_index).unwrap_or(0);
+                n = lo | (hi << 8);
+                *length = length.saturating_add(n);
+                if n != 0xFFFF || (*source_index as usize) >= buffer.len() {
                     break;
                 }
             }
@@ -262,7 +271,10 @@ fn copy_back_reference(dst: &mut [u8], dst_index: u32, length: u32, src_offset: 
         return;
     }
     let mut initial_index = dst_index - src_offset;
-    let max_index = initial_index + length;
+    let max_index = match initial_index.checked_add(length) {
+        Some(m) => m,
+        None => return,
+    };
 
     let mut di = dst_index;
     while initial_index < max_index {
@@ -496,6 +508,24 @@ mod tests {
         // Single opcode byte, length = 0 → no output
         decompress_ac21(&source, 0, 0, &mut buffer);
         assert!(buffer.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_decompress_zero_length_source() {
+        let source: [u8; 0] = [];
+        let mut buffer = [0u8; 16];
+        decompress_ac21(&source, 0, 0, &mut buffer);
+        decompress_ac21(&source, 10, 5, &mut buffer);
+    }
+
+    #[test]
+    fn test_decompress_truncated_corrupt_data() {
+        let source = [0x20, 0x01];
+        let mut buffer = [0u8; 32];
+        decompress_ac21(&source, 0, 2, &mut buffer);
+
+        let corrupt = [0x00, 0xFF, 0xFF];
+        decompress_ac21(&corrupt, 0, 3, &mut buffer);
     }
 
     #[test]

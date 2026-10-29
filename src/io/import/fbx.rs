@@ -334,7 +334,13 @@ fn parse_binary_fbx(data: &[u8]) -> Result<Vec<FbxNode>> {
         match node {
             None => break, // NULL record
             Some(n) => {
-                pos = cursor.position();
+                let next_pos = cursor.position();
+                if next_pos <= pos {
+                    return Err(DxfError::ImportError(
+                        "Corrupted FBX file: node offset did not advance".to_string(),
+                    ));
+                }
+                pos = next_pos;
                 nodes.push(n);
             }
         }
@@ -367,6 +373,19 @@ fn read_fbx_node(
         return Ok(None);
     }
 
+    if end_offset > 0 {
+        if end_offset > data.len() as u64 {
+            return Err(DxfError::ImportError(
+                "FBX node end_offset exceeds file length".to_string(),
+            ));
+        }
+        if end_offset < cursor.position() {
+            return Err(DxfError::ImportError(
+                "FBX node end_offset is before current position".to_string(),
+            ));
+        }
+    }
+
     let pos = cursor.position() as usize;
     if pos + name_len as usize > data.len() {
         return Err(DxfError::ImportError(
@@ -396,9 +415,17 @@ fn read_fbx_node(
     let mut children = Vec::new();
     if end_offset > 0 && (cursor.position() as u64) < end_offset {
         while (cursor.position() as u64) < end_offset {
+            let child_pos = cursor.position();
             match read_fbx_node(data, cursor, use_64bit)? {
                 None => break, // NULL terminator
-                Some(child) => children.push(child),
+                Some(child) => {
+                    if cursor.position() <= child_pos {
+                        return Err(DxfError::ImportError(
+                            "Corrupted FBX file: child node offset did not advance".to_string(),
+                        ));
+                    }
+                    children.push(child);
+                }
             }
         }
     }
@@ -477,6 +504,8 @@ fn read_array_header(cursor: &mut Cursor<&[u8]>) -> Result<(u32, u32, u32)> {
     Ok((count, encoding, compressed_len))
 }
 
+const MAX_FBX_ARRAY_BYTES: usize = 64 * 1024 * 1024; // 64 MB cap per array
+
 fn decompress_array_data(
     data: &[u8],
     cursor: &mut Cursor<&[u8]>,
@@ -486,18 +515,29 @@ fn decompress_array_data(
     count: u32,
 ) -> Result<Vec<u8>> {
     let pos = cursor.position() as usize;
+    let expected = (count as usize)
+        .checked_mul(element_size)
+        .ok_or_else(|| DxfError::ImportError("FBX array byte length overflow".to_string()))?;
+    if expected > MAX_FBX_ARRAY_BYTES {
+        return Err(DxfError::ImportError(format!(
+            "FBX array size ({} bytes) exceeds maximum limit ({} bytes)",
+            expected, MAX_FBX_ARRAY_BYTES
+        )));
+    }
     if encoding == 1 {
         // zlib/deflate compressed
-        if pos + compressed_len as usize > data.len() {
+        let compressed_end = pos.checked_add(compressed_len as usize).ok_or_else(|| {
+            DxfError::ImportError("FBX compressed array offset overflow".to_string())
+        })?;
+        if compressed_end > data.len() {
             return Err(DxfError::ImportError(
                 "FBX compressed array out of bounds".to_string(),
             ));
         }
-        let compressed = &data[pos..pos + compressed_len as usize];
-        cursor.set_position((pos + compressed_len as usize) as u64);
+        let compressed = &data[pos..compressed_end];
+        cursor.set_position(compressed_end as u64);
 
         let mut decoder = flate2::read::ZlibDecoder::new(compressed);
-        let expected = count as usize * element_size;
         let mut decompressed = vec![0u8; expected];
         decoder
             .read_exact(&mut decompressed)
@@ -505,12 +545,15 @@ fn decompress_array_data(
         Ok(decompressed)
     } else {
         // Uncompressed
-        let byte_len = count as usize * element_size;
-        if pos + byte_len > data.len() {
+        let byte_len = expected;
+        let uncompressed_end = pos.checked_add(byte_len).ok_or_else(|| {
+            DxfError::ImportError("FBX array offset overflow".to_string())
+        })?;
+        if uncompressed_end > data.len() {
             return Err(DxfError::ImportError("FBX array out of bounds".to_string()));
         }
-        let result = data[pos..pos + byte_len].to_vec();
-        cursor.set_position((pos + byte_len) as u64);
+        let result = data[pos..uncompressed_end].to_vec();
+        cursor.set_position(uncompressed_end as u64);
         Ok(result)
     }
 }
@@ -518,9 +561,10 @@ fn decompress_array_data(
 fn read_array_f64(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<FbxProp> {
     let (count, encoding, compressed_len) = read_array_header(cursor)?;
     let raw = decompress_array_data(data, cursor, encoding, compressed_len, 8, count)?;
-    let mut values = Vec::with_capacity(count as usize);
+    let alloc_cap = (count as usize).min(raw.len() / 8);
+    let mut values = Vec::with_capacity(alloc_cap);
     let mut c = Cursor::new(&raw[..]);
-    for _ in 0..count {
+    for _ in 0..alloc_cap {
         values.push(c.read_f64::<LittleEndian>().unwrap_or(0.0));
     }
     Ok(FbxProp::ArrayF64(values))
@@ -535,9 +579,10 @@ fn read_array_f32(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<FbxProp> {
 fn read_array_i32(data: &[u8], cursor: &mut Cursor<&[u8]>) -> Result<FbxProp> {
     let (count, encoding, compressed_len) = read_array_header(cursor)?;
     let raw = decompress_array_data(data, cursor, encoding, compressed_len, 4, count)?;
-    let mut values = Vec::with_capacity(count as usize);
+    let alloc_cap = (count as usize).min(raw.len() / 4);
+    let mut values = Vec::with_capacity(alloc_cap);
     let mut c = Cursor::new(&raw[..]);
-    for _ in 0..count {
+    for _ in 0..alloc_cap {
         values.push(c.read_i32::<LittleEndian>().unwrap_or(0));
     }
     Ok(FbxProp::ArrayI32(values))
@@ -1150,5 +1195,29 @@ Connections: {
             .vertices
             .iter()
             .any(|vertex| (vertex.x - 11.0).abs() < 1e-8 && vertex.y == 0.0 && vertex.z == 0.0));
+    }
+
+    #[test]
+    fn fbx_decompression_bomb_is_rejected() {
+        let mut cursor = Cursor::new(&b""[..]);
+        let res = decompress_array_data(&[], &mut cursor, 1, 0, 8, 0x3FFF_FFFF);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("exceeds maximum limit"));
+    }
+
+    #[test]
+    fn fbx_loop_does_not_hang_on_corrupt_offset() {
+        // Construct binary FBX with node whose end_offset <= pos (27)
+        let mut data = Vec::new();
+        data.extend_from_slice(b"Kaydara FBX Binary  \x00\x1a\x00"); // 23 bytes
+        data.extend_from_slice(&7300u32.to_le_bytes()); // version at 23..27
+        // Node at 27: end_offset = 27 (<= pos), num_prop=0, prop_len=0, name_len=1, name="A"
+        data.extend_from_slice(&27u32.to_le_bytes()); // end_offset = 27
+        data.extend_from_slice(&0u32.to_le_bytes()); // num_properties
+        data.extend_from_slice(&0u32.to_le_bytes()); // property_list_len
+        data.push(1); // name_len
+        data.push(b'A'); // name
+        let res = parse_binary_fbx(&data);
+        assert!(res.is_err());
     }
 }

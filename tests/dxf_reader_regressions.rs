@@ -180,3 +180,51 @@ fn table_merged_ranges_are_rebuilt_after_dxf_roundtrip() {
         .expect("TABLE missing");
     assert_eq!(t.merged_ranges, vec![CellRange::new(0, 0, 1, 1)]);
 }
+
+#[test]
+fn hatch_negative_vertices_count_does_not_panic() {
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nHATCH\n2\nSOLID\n70\n1\n71\n0\n91\n1\n92\n2\n72\n0\n73\n1\n93\n-1\n0\nENDSEC\n0\nEOF\n";
+    let doc = DxfReader::from_reader(Cursor::new(dxf.as_bytes().to_vec()))
+        .unwrap()
+        .read();
+    assert!(doc.is_ok());
+}
+
+#[test]
+fn hatch_spline_edge_mismatched_codes_does_not_spin() {
+    let dxf = "0\nSECTION\n2\nENTITIES\n0\nHATCH\n2\nSOLID\n70\n1\n71\n0\n91\n1\n92\n0\n93\n1\n72\n4\n94\n3\n95\n0\n96\n100000\n0\nENDSEC\n0\nEOF\n";
+    let start = std::time::Instant::now();
+    let doc = DxfReader::from_reader(Cursor::new(dxf.as_bytes().to_vec()))
+        .unwrap()
+        .read();
+    assert!(doc.is_ok());
+    assert!(start.elapsed().as_millis() < 500);
+}
+
+#[test]
+fn hatch_large_vertex_count_is_not_truncated() {
+    let count = 100_005;
+    let mut dxf = String::with_capacity(count * 20);
+    dxf.push_str("0\nSECTION\n2\nENTITIES\n0\nHATCH\n2\nSOLID\n70\n1\n71\n0\n91\n1\n92\n2\n72\n0\n73\n1\n93\n");
+    dxf.push_str(&count.to_string());
+    dxf.push('\n');
+    for _ in 0..count {
+        dxf.push_str("10\n0.0\n20\n0.0\n");
+    }
+    dxf.push_str("0\nENDSEC\n0\nEOF\n");
+    let doc = DxfReader::from_reader(Cursor::new(dxf.into_bytes()))
+        .unwrap()
+        .read()
+        .expect("Large hatch should parse successfully");
+    let hatch = doc.entities().find_map(|e| match e {
+        EntityType::Hatch(h) => Some(h),
+        _ => None,
+    }).expect("Hatch missing");
+    let boundary = &hatch.paths[0];
+    match &boundary.edges[0] {
+        acadrust::entities::hatch::BoundaryEdge::Polyline(poly) => {
+            assert_eq!(poly.vertices.len(), count);
+        }
+        _ => panic!("Expected polyline edge"),
+    }
+}

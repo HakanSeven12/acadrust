@@ -170,6 +170,84 @@ impl Dictionary {
         self.entries.push((key.into(), handle));
     }
 
+    /// Insert or replace an entry by key (case-insensitive).
+    /// If an entry with this key already exists, its handle is replaced in-place
+    /// and the previous handle is returned.
+    pub fn insert(&mut self, key: impl Into<String>, handle: Handle) -> Option<Handle> {
+        let key_str = key.into();
+        if let Some((_, h)) = self
+            .entries
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&key_str))
+        {
+            let old = *h;
+            *h = handle;
+            Some(old)
+        } else {
+            self.entries.push((key_str, handle));
+            None
+        }
+    }
+
+    /// Alias for [`insert`].
+    #[inline]
+    pub fn set(&mut self, key: impl Into<String>, handle: Handle) -> Option<Handle> {
+        self.insert(key, handle)
+    }
+
+    /// Check if the dictionary contains a specific key (case-insensitive).
+    #[inline]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Remove an entry by key (case-insensitive).
+    /// Returns the removed handle if found, and cleans up any hard-ownership flag.
+    pub fn remove(&mut self, key: &str) -> Option<Handle> {
+        let pos = self
+            .entries
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))?;
+        let (_, handle) = self.entries.remove(pos);
+        self.hard_owner_entries
+            .retain(|name| !name.eq_ignore_ascii_case(key));
+        Some(handle)
+    }
+
+    /// Remove an entry by key (case-insensitive).
+    /// Returns the removed key and handle if found, and cleans up any hard-ownership flag.
+    pub fn remove_entry(&mut self, key: &str) -> Option<(String, Handle)> {
+        let pos = self
+            .entries
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))?;
+        let (k, handle) = self.entries.remove(pos);
+        self.hard_owner_entries
+            .retain(|name| !name.eq_ignore_ascii_case(key));
+        Some((k, handle))
+    }
+
+    /// Remove all entries and clear hard-ownership tracking.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.hard_owner_entries.clear();
+    }
+
+    /// Iterate over (key, handle) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Handle)> + '_ {
+        self.entries.iter().map(|(k, h)| (k.as_str(), *h))
+    }
+
+    /// Iterate over keys.
+    pub fn keys(&self) -> impl Iterator<Item = &str> + '_ {
+        self.entries.iter().map(|(k, _)| k.as_str())
+    }
+
+    /// Iterate over handles.
+    pub fn values(&self) -> impl Iterator<Item = Handle> + '_ {
+        self.entries.iter().map(|(_, h)| *h)
+    }
+
     /// Record whether a specific entry uses hard ownership.
     pub fn set_entry_hard_owner(&mut self, key: &str, hard_owner: bool) {
         self.hard_owner_entries
@@ -761,6 +839,58 @@ mod tests {
         assert_eq!(dict.len(), 1);
         assert_eq!(dict.get("KEY1"), Some(Handle::new(100)));
         assert_eq!(dict.get("KEY2"), None);
+    }
+
+    #[test]
+    fn test_dictionary_collection_operations() {
+        let mut dict = Dictionary::new();
+        assert!(dict.is_empty());
+        assert_eq!(dict.len(), 0);
+
+        // insert and case-insensitivity
+        assert_eq!(dict.insert("Alpha", Handle::new(10)), None);
+        assert!(dict.contains_key("alpha"));
+        assert!(dict.contains_key("ALPHA"));
+        assert_eq!(dict.get("ALPHA"), Some(Handle::new(10)));
+        assert_eq!(dict.len(), 1);
+
+        // replacement
+        assert_eq!(dict.insert("ALPHA", Handle::new(20)), Some(Handle::new(10)));
+        assert_eq!(dict.len(), 1);
+        assert_eq!(dict.get("alpha"), Some(Handle::new(20)));
+
+        // set alias
+        assert_eq!(dict.set("Beta", Handle::new(30)), None);
+        assert_eq!(dict.len(), 2);
+
+        // hard-owner synchronization on removal
+        dict.set_entry_hard_owner("Alpha", true);
+        assert!(dict.is_entry_hard_owner("ALPHA"));
+
+        // remove
+        assert_eq!(dict.remove("alpha"), Some(Handle::new(20)));
+        assert!(!dict.contains_key("alpha"));
+        assert!(!dict.is_entry_hard_owner("alpha"));
+        assert_eq!(dict.len(), 1);
+
+        // remove_entry
+        assert_eq!(dict.remove_entry("NonExistent"), None);
+        assert_eq!(dict.remove_entry("BETA"), Some(("Beta".to_string(), Handle::new(30))));
+        assert!(dict.is_empty());
+
+        // iterators and clear
+        dict.insert("One", Handle::new(1));
+        dict.insert("Two", Handle::new(2));
+        let keys: Vec<&str> = dict.keys().collect();
+        assert_eq!(keys, vec!["One", "Two"]);
+        let values: Vec<Handle> = dict.values().collect();
+        assert_eq!(values, vec![Handle::new(1), Handle::new(2)]);
+        let pairs: Vec<(&str, Handle)> = dict.iter().collect();
+        assert_eq!(pairs, vec![("One", Handle::new(1)), ("Two", Handle::new(2))]);
+
+        dict.clear();
+        assert!(dict.is_empty());
+        assert_eq!(dict.len(), 0);
     }
 
     #[test]

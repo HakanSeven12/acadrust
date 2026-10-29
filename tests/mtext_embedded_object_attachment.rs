@@ -1,14 +1,9 @@
-//! An R2018 MTEXT with columns keeps the attachment point of its embedded object.
+//! An R2018 MTEXT with columns preserves the attachment point of group 71.
 //!
 //! In an AC1032 DXF the column layout of an MTEXT lives in a `101 Embedded
-//! Object` block whose group 70 is the attachment point of that layout. CAD
-//! applications that save such a drawing (ZWCAD 2025 among them) can write a
-//! different value in the entity's own group 71: the eighty column rulers of a
-//! production drawing carry 71 = 5 (middle centre) and 70 = 1 (top left), and
-//! the DWG they came from stores 1. ZWCAD renders both the DXF and the DWG from
-//! the embedded value. Reading group 71 only, as the DXF reader did, exports a
-//! DWG whose text is drawn from a different corner — about 1.4 mm left and
-//! 1.0 mm up on an A3 plot — while every other entity stays in place.
+//! Object` block. Group 71 on the entity specifies the attachment point used
+//! by DWG and CAD applications (such as ODA and AutoCAD). Group 70 in the
+//! embedded object serves as a fallback when group 71 is absent (#249).
 
 use std::io::Cursor;
 
@@ -49,6 +44,22 @@ fn dxf(embedded_attachment: Option<i16>) -> Vec<u8> {
     lines.join("\r\n").into_bytes()
 }
 
+/// An AC1032 DXF where group 71 is omitted, leaving only the embedded object's group 70.
+fn dxf_without_group_71(embedded_attachment: i16) -> Vec<u8> {
+    let bytes = dxf(Some(embedded_attachment));
+    let text = String::from_utf8(bytes).unwrap();
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let marker = lines
+        .iter()
+        .position(|l| l.trim() == "Embedded Object")
+        .expect("embedded object");
+    if let Some(pos) = lines[..marker].iter().rposition(|l| l.trim() == "71") {
+        lines.remove(pos + 1);
+        lines.remove(pos);
+    }
+    lines.join("\r\n").into_bytes()
+}
+
 fn only_mtext(doc: &CadDocument) -> MText {
     let mut found = doc.entities().filter_map(|e| match e {
         EntityType::MText(m) => Some((**m).clone()),
@@ -67,29 +78,36 @@ fn read_dxf(bytes: Vec<u8>) -> CadDocument {
 }
 
 #[test]
-fn embedded_object_attachment_wins_over_group_71() {
+fn group_71_attachment_wins_over_embedded_object_group_70() {
     let m = only_mtext(&read_dxf(dxf(Some(1))));
-    assert_eq!(m.attachment_point, AttachmentPoint::TopLeft);
+    assert_eq!(m.attachment_point, AttachmentPoint::MiddleCenter);
     assert_eq!(m.column_data.column_type, 2, "the columns are still read");
     assert_eq!(m.column_data.heights, vec![-2.552864938608458]);
 }
 
 #[test]
-fn embedded_object_attachment_reaches_the_dwg() {
+fn group_71_attachment_reaches_the_dwg() {
     let doc = read_dxf(dxf(Some(1)));
     let bytes = DwgWriter::write_to_vec(&doc).unwrap();
     let dwg = DwgReader::from_stream(Cursor::new(bytes)).read().unwrap();
     let m = only_mtext(&dwg);
-    assert_eq!(m.attachment_point, AttachmentPoint::TopLeft);
+    assert_eq!(m.attachment_point, AttachmentPoint::MiddleCenter);
     assert_eq!(m.column_data.column_type, 2);
 }
 
 #[test]
-fn embedded_object_attachment_survives_a_dxf_round_trip() {
+fn group_71_attachment_survives_a_dxf_round_trip() {
     let doc = read_dxf(dxf(Some(1)));
     let bytes = DxfWriter::new(&doc).write_to_vec().unwrap();
     let m = only_mtext(&read_dxf(bytes));
+    assert_eq!(m.attachment_point, AttachmentPoint::MiddleCenter);
+}
+
+#[test]
+fn embedded_object_attachment_used_when_group_71_is_absent() {
+    let m = only_mtext(&read_dxf(dxf_without_group_71(1)));
     assert_eq!(m.attachment_point, AttachmentPoint::TopLeft);
+    assert_eq!(m.column_data.column_type, 2);
 }
 
 #[test]

@@ -134,6 +134,22 @@ impl<'a, W: DxfStreamWriter> SectionWriter<'a, W> {
         }
     }
 
+    /// The handle the writer gives the next record it creates itself, such as
+    /// a polyline VERTEX or a SEQEND.
+    pub fn next_handle(&self) -> u64 {
+        self.next_handle
+    }
+
+    /// Number the records the writer creates from `next` on.
+    ///
+    /// Writing several documents into one DXF (for example, the entities of
+    /// a drawing read in parts) with one writer each, pass each writer the
+    /// previous one's [`next_handle`](Self::next_handle) so the records they
+    /// create get distinct handles.
+    pub fn set_next_handle(&mut self, next: u64) {
+        self.next_handle = next;
+    }
+
     /// Build the set of all handles that will appear in the output DXF.
     /// Call this before writing BLOCKS / ENTITIES / OBJECTS.
     pub fn build_valid_handles(&mut self, document: &CadDocument) {

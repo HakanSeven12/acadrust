@@ -560,12 +560,28 @@ fn read_accessor_vec3(
         .get(buffer_idx)
         .ok_or_else(|| DxfError::ImportError(format!("Buffer {} not loaded", buffer_idx)))?;
 
-    let start = byte_offset_bv + byte_offset_acc;
-    let mut positions = Vec::with_capacity(count);
+    let start = byte_offset_bv.checked_add(byte_offset_acc).ok_or_else(|| {
+        DxfError::ImportError("Buffer offset overflow in glTF accessor".to_string())
+    })?;
+
+    let max_possible = if start >= buffer.len() || byte_stride == 0 {
+        0
+    } else {
+        (buffer.len() - start) / byte_stride
+    };
+    let alloc_cap = count.min(max_possible);
+    let mut positions = Vec::with_capacity(alloc_cap);
 
     for i in 0..count {
-        let offset = start + i * byte_stride;
-        if offset + 12 > buffer.len() {
+        let stride_offset = match i.checked_mul(byte_stride) {
+            Some(so) => so,
+            None => break,
+        };
+        let offset = match start.checked_add(stride_offset) {
+            Some(o) => o,
+            None => break,
+        };
+        if offset.checked_add(12).map_or(true, |end| end > buffer.len()) {
             break;
         }
         let x = f32::from_le_bytes([
@@ -637,14 +653,32 @@ fn read_accessor_scalar(
         .get(buffer_idx)
         .ok_or_else(|| DxfError::ImportError(format!("Buffer {} not loaded", buffer_idx)))?;
 
-    let start = byte_offset_bv + byte_offset_acc;
-    let mut indices = Vec::with_capacity(count);
+    let start = byte_offset_bv.checked_add(byte_offset_acc).ok_or_else(|| {
+        DxfError::ImportError("Buffer offset overflow in glTF accessor".to_string())
+    })?;
+
+    let item_size = match component_type {
+        5121 => 1,
+        5123 => 2,
+        5125 => 4,
+        _ => 1,
+    };
+    let max_possible = if start >= buffer.len() {
+        0
+    } else {
+        (buffer.len() - start) / item_size
+    };
+    let alloc_cap = count.min(max_possible);
+    let mut indices = Vec::with_capacity(alloc_cap);
 
     match component_type {
         5121 => {
             // UNSIGNED_BYTE
             for i in 0..count {
-                let offset = start + i;
+                let offset = match start.checked_add(i) {
+                    Some(o) => o,
+                    None => break,
+                };
                 if offset >= buffer.len() {
                     break;
                 }
@@ -654,8 +688,11 @@ fn read_accessor_scalar(
         5123 => {
             // UNSIGNED_SHORT
             for i in 0..count {
-                let offset = start + i * 2;
-                if offset + 2 > buffer.len() {
+                let offset = match i.checked_mul(2).and_then(|so| start.checked_add(so)) {
+                    Some(o) => o,
+                    None => break,
+                };
+                if offset.checked_add(2).map_or(true, |end| end > buffer.len()) {
                     break;
                 }
                 let v = u16::from_le_bytes([buffer[offset], buffer[offset + 1]]);
@@ -665,8 +702,11 @@ fn read_accessor_scalar(
         5125 => {
             // UNSIGNED_INT
             for i in 0..count {
-                let offset = start + i * 4;
-                if offset + 4 > buffer.len() {
+                let offset = match i.checked_mul(4).and_then(|so| start.checked_add(so)) {
+                    Some(o) => o,
+                    None => break,
+                };
+                if offset.checked_add(4).map_or(true, |end| end > buffer.len()) {
                     break;
                 }
                 let v = u32::from_le_bytes([
@@ -905,6 +945,19 @@ mod tests {
     fn triangle_strip_alternates_winding() {
         let triangles = triangle_indices(&[0, 1, 2, 3], 5);
         assert_eq!(triangles, vec![[0, 1, 2], [2, 1, 3]]);
+    }
+
+    #[test]
+    fn gltf_huge_count_tiny_buffer_does_not_oom() {
+        let json = r#"{
+  "asset": {"version": "2.0"},
+  "buffers": [{"uri": "data:application/octet-stream;base64,AAAA", "byteLength": 4}],
+  "bufferViews": [{"buffer": 0, "byteOffset": 0, "byteLength": 4}],
+  "accessors": [{"bufferView": 0, "componentType": 5126, "count": 2000000000, "type": "VEC3"}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}}]}]
+}"#;
+        let doc = GltfImporter::from_bytes(json.as_bytes().to_vec()).import().unwrap();
+        assert_eq!(doc.entities().count(), 0);
     }
 
     /// Simple base64 encoder for tests.

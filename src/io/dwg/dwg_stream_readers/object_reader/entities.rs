@@ -5749,17 +5749,16 @@ pub fn read_surface(
     has_ds_data: bool,
     kind: SurfaceKind,
 ) -> SurfaceEntityData {
-    // An AcDs-backed R2013+ surface can keep a second modeler body
-    // ("ASM BinaryFile") right after the silhouettes, where a solid keeps
-    // its extra body; reading on past it takes the SAB bytes for the
-    // material count. The probe rewinds when no body header is there.
-    let inline_extra = has_ds_data && version.r2013_plus(dxf_version);
+    // The optional extra modeler block belongs to AcDs-backed (R2013+) surfaces.
+    // On inline pre-R2013 ACIS surfaces, the next fields are the surface isoline counts;
+    // probing them inside read_acis_entity_impl shifts the record by one bit.
+    let allow_extra = has_ds_data || version.r2013_plus(dxf_version);
     let Some(mut acis) = read_acis_entity_impl(
         reader,
         version,
         dxf_version,
         has_ds_data,
-        inline_extra,
+        allow_extra,
         false,
         None,
     ) else {

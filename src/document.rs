@@ -4559,6 +4559,335 @@ impl CadDocument {
         record_handle
     }
 
+    /// Returns the Named Objects Dictionary (root dictionary) if present.
+    pub fn named_objects_dictionary(&self) -> Option<&crate::objects::Dictionary> {
+        match self.objects.get(&self.header.named_objects_dict_handle)? {
+            ObjectType::Dictionary(dict) => Some(dict),
+            _ => None,
+        }
+    }
+
+    /// Mutable counterpart of [`CadDocument::named_objects_dictionary`].
+    pub fn named_objects_dictionary_mut(&mut self) -> Option<&mut crate::objects::Dictionary> {
+        match self.objects.get_mut(&self.header.named_objects_dict_handle)? {
+            ObjectType::Dictionary(dict) => Some(dict),
+            _ => None,
+        }
+    }
+
+    /// Ensure the Named Objects Dictionary exists, allocating and inserting a new root dictionary if missing.
+    pub fn ensure_named_objects_dictionary(&mut self) -> Handle {
+        let mut root_handle = self.header.named_objects_dict_handle;
+        if root_handle.is_null()
+            || !matches!(self.objects.get(&root_handle), Some(ObjectType::Dictionary(_)))
+        {
+            root_handle = self.allocate_handle();
+            let mut root = crate::objects::Dictionary::new();
+            root.handle = root_handle;
+            self.objects
+                .insert(root_handle, ObjectType::Dictionary(root));
+            self.header.named_objects_dict_handle = root_handle;
+        }
+        root_handle
+    }
+
+    /// Resolve a sub-dictionary by name from the Named Objects Dictionary.
+    pub fn get_subdictionary(&self, name: &str) -> Option<Handle> {
+        self.named_objects_dictionary()?.get(name)
+    }
+
+    /// Ensure a named sub-dictionary exists under the Named Objects Dictionary.
+    /// If it already exists, its handle is returned; otherwise, a new dictionary is allocated,
+    /// owned by the root dictionary, inserted into `objects`, and registered under `name`.
+    pub fn ensure_subdictionary(&mut self, name: &str) -> Handle {
+        let root_handle = self.ensure_named_objects_dictionary();
+        if let Some(ObjectType::Dictionary(root)) = self.objects.get(&root_handle) {
+            if let Some(existing) = root.get(name) {
+                if matches!(self.objects.get(&existing), Some(ObjectType::Dictionary(_))) {
+                    return existing;
+                }
+            }
+        }
+
+        let sub_handle = self.allocate_handle();
+        let mut sub_dict = crate::objects::Dictionary::new();
+        sub_dict.handle = sub_handle;
+        sub_dict.owner = root_handle;
+        self.objects
+            .insert(sub_handle, ObjectType::Dictionary(sub_dict));
+
+        if let Some(ObjectType::Dictionary(root)) = self.objects.get_mut(&root_handle) {
+            root.insert(name, sub_handle);
+        }
+
+        sub_handle
+    }
+
+    /// Remove a named sub-dictionary from the Named Objects Dictionary and remove its object from the document.
+    /// Returns the removed sub-dictionary handle if found.
+    pub fn remove_subdictionary(&mut self, name: &str) -> Option<Handle> {
+        let root_handle = self.header.named_objects_dict_handle;
+        let sub_handle = match self.objects.get_mut(&root_handle)? {
+            ObjectType::Dictionary(root) => root.remove(name)?,
+            _ => return None,
+        };
+        self.objects.remove(&sub_handle);
+        Some(sub_handle)
+    }
+
+    /// Return the group with the given name from the `ACAD_GROUP` dictionary.
+    pub fn get_group(&self, name: &str) -> Option<&crate::objects::Group> {
+        let group_dict_handle = self.header.acad_group_dict_handle;
+        let ObjectType::Dictionary(dict) = self.objects.get(&group_dict_handle)? else {
+            return None;
+        };
+        let group_handle = dict.get(name)?;
+        match self.objects.get(&group_handle)? {
+            ObjectType::Group(group) => Some(group),
+            _ => None,
+        }
+    }
+
+    /// Mutable counterpart of [`CadDocument::get_group`].
+    pub fn get_group_mut(&mut self, name: &str) -> Option<&mut crate::objects::Group> {
+        let group_dict_handle = self.header.acad_group_dict_handle;
+        let group_handle = match self.objects.get(&group_dict_handle)? {
+            ObjectType::Dictionary(dict) => dict.get(name)?,
+            _ => return None,
+        };
+        match self.objects.get_mut(&group_handle)? {
+            ObjectType::Group(group) => Some(group),
+            _ => None,
+        }
+    }
+
+    /// Return the group with the given handle.
+    pub fn get_group_by_handle(&self, handle: Handle) -> Option<&crate::objects::Group> {
+        match self.objects.get(&handle)? {
+            ObjectType::Group(group) => Some(group),
+            _ => None,
+        }
+    }
+
+    /// Mutable counterpart of [`CadDocument::get_group_by_handle`].
+    pub fn get_group_by_handle_mut(
+        &mut self,
+        handle: Handle,
+    ) -> Option<&mut crate::objects::Group> {
+        match self.objects.get_mut(&handle)? {
+            ObjectType::Group(group) => Some(group),
+            _ => None,
+        }
+    }
+
+    /// Iterate over all groups defined in the document.
+    pub fn groups(&self) -> impl Iterator<Item = &crate::objects::Group> + '_ {
+        self.objects.values().filter_map(|obj| match obj {
+            ObjectType::Group(group) => Some(group),
+            _ => None,
+        })
+    }
+
+    /// Create a named group containing the given entity handles, registering it in `ACAD_GROUP`
+    /// and adding the group reactor to each referenced entity.
+    pub fn create_group(
+        &mut self,
+        name: &str,
+        entities: &[Handle],
+    ) -> crate::error::Result<Handle> {
+        if name.is_empty() {
+            return Err(crate::error::DxfError::Custom(
+                "group name cannot be empty".into(),
+            ));
+        }
+
+        let mut group_dict_handle = self.header.acad_group_dict_handle;
+        if group_dict_handle.is_null()
+            || !matches!(
+                self.objects.get(&group_dict_handle),
+                Some(ObjectType::Dictionary(_))
+            )
+        {
+            group_dict_handle = self.ensure_subdictionary("ACAD_GROUP");
+            self.header.acad_group_dict_handle = group_dict_handle;
+        }
+
+        let group_handle = self.allocate_handle();
+        let mut group = crate::objects::Group::new(name);
+        group.handle = group_handle;
+        group.owner = group_dict_handle;
+
+        for &e in entities {
+            group.add_entity(e);
+            if let Some(entity) = self.get_entity_mut(e) {
+                if !entity.common().reactors.contains(&group_handle) {
+                    entity.common_mut().reactors.push(group_handle);
+                }
+            }
+        }
+
+        self.objects
+            .insert(group_handle, ObjectType::Group(group));
+
+        if let Some(ObjectType::Dictionary(dict)) = self.objects.get_mut(&group_dict_handle) {
+            dict.insert(name, group_handle);
+        }
+
+        Ok(group_handle)
+    }
+
+    /// Create an unnamed group containing the given entity handles.
+    /// Allocates an auto-incremented `*An` name according to AutoCAD conventions.
+    pub fn create_unnamed_group(&mut self, entities: &[Handle]) -> crate::error::Result<Handle> {
+        let mut group_dict_handle = self.header.acad_group_dict_handle;
+        if group_dict_handle.is_null()
+            || !matches!(
+                self.objects.get(&group_dict_handle),
+                Some(ObjectType::Dictionary(_))
+            )
+        {
+            group_dict_handle = self.ensure_subdictionary("ACAD_GROUP");
+            self.header.acad_group_dict_handle = group_dict_handle;
+        }
+
+        let name = {
+            let dict = match self.objects.get(&group_dict_handle) {
+                Some(ObjectType::Dictionary(d)) => d,
+                _ => {
+                    return Err(crate::error::DxfError::Custom(
+                        "ACAD_GROUP missing".into(),
+                    ))
+                }
+            };
+            let mut i = 1;
+            loop {
+                let candidate = format!("*A{}", i);
+                if !dict.contains_key(&candidate) {
+                    break candidate;
+                }
+                i += 1;
+            }
+        };
+
+        let group_handle = self.allocate_handle();
+        let mut group = crate::objects::Group::new(&name);
+        group.handle = group_handle;
+        group.owner = group_dict_handle;
+        group.unnamed = true;
+
+        for &e in entities {
+            group.add_entity(e);
+            if let Some(entity) = self.get_entity_mut(e) {
+                if !entity.common().reactors.contains(&group_handle) {
+                    entity.common_mut().reactors.push(group_handle);
+                }
+            }
+        }
+
+        self.objects
+            .insert(group_handle, ObjectType::Group(group));
+
+        if let Some(ObjectType::Dictionary(dict)) = self.objects.get_mut(&group_dict_handle) {
+            dict.insert(&name, group_handle);
+        }
+
+        Ok(group_handle)
+    }
+
+    /// Add an entity to an existing group, updating both the group's entity list and the entity's reactors.
+    pub fn add_entity_to_group(
+        &mut self,
+        group_name: &str,
+        entity: Handle,
+    ) -> crate::error::Result<()> {
+        let group_dict_handle = self.header.acad_group_dict_handle;
+        let group_handle = match self.objects.get(&group_dict_handle) {
+            Some(ObjectType::Dictionary(dict)) => dict.get(group_name).ok_or_else(|| {
+                crate::error::DxfError::Custom(format!("group not found: {}", group_name))
+            })?,
+            _ => {
+                return Err(crate::error::DxfError::Custom(
+                    "ACAD_GROUP dictionary missing".into(),
+                ))
+            }
+        };
+
+        if let Some(ObjectType::Group(group)) = self.objects.get_mut(&group_handle) {
+            group.add_entity(entity);
+        } else {
+            return Err(crate::error::DxfError::Custom(
+                "group object missing".into(),
+            ));
+        }
+
+        if let Some(e) = self.get_entity_mut(entity) {
+            if !e.common().reactors.contains(&group_handle) {
+                e.common_mut().reactors.push(group_handle);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Remove an entity from a group, updating both the group's entity list and detaching the group reactor.
+    pub fn remove_entity_from_group(
+        &mut self,
+        group_name: &str,
+        entity: Handle,
+    ) -> crate::error::Result<()> {
+        let group_dict_handle = self.header.acad_group_dict_handle;
+        let group_handle = match self.objects.get(&group_dict_handle) {
+            Some(ObjectType::Dictionary(dict)) => dict.get(group_name).ok_or_else(|| {
+                crate::error::DxfError::Custom(format!("group not found: {}", group_name))
+            })?,
+            _ => {
+                return Err(crate::error::DxfError::Custom(
+                    "ACAD_GROUP dictionary missing".into(),
+                ))
+            }
+        };
+
+        if let Some(ObjectType::Group(group)) = self.objects.get_mut(&group_handle) {
+            group.remove_entity(entity);
+        } else {
+            return Err(crate::error::DxfError::Custom(
+                "group object missing".into(),
+            ));
+        }
+
+        if let Some(e) = self.get_entity_mut(entity) {
+            e.common_mut().reactors.retain(|&r| r != group_handle);
+        }
+
+        Ok(())
+    }
+
+    /// Remove a group from `ACAD_GROUP`, delete the group object, and remove its reactor handle from grouped entities.
+    /// Returns the removed `Group` if found.
+    pub fn remove_group(&mut self, name: &str) -> Option<crate::objects::Group> {
+        let group_dict_handle = self.header.acad_group_dict_handle;
+        let group_handle = match self.objects.get_mut(&group_dict_handle)? {
+            ObjectType::Dictionary(dict) => dict.remove(name)?,
+            _ => return None,
+        };
+
+        let group = match self.objects.remove(&group_handle)? {
+            ObjectType::Group(g) => g,
+            other => {
+                self.objects.insert(group_handle, other);
+                return None;
+            }
+        };
+
+        for &e in &group.entities {
+            if let Some(entity) = self.get_entity_mut(e) {
+                entity.common_mut().reactors.retain(|&r| r != group_handle);
+            }
+        }
+
+        Some(group)
+    }
+
     /// Assign dictionary keys to XRecord objects after file loading.
     pub fn resolve_xrecord_names(&mut self) {
         let mut names: Vec<(Handle, String)> = self
@@ -4622,6 +4951,24 @@ impl CadDocument {
                 if let Some(name) = row.text_style_handle.and_then(|h| text_styles.get(&h)) {
                     row.text_style_name = name.clone();
                 }
+            }
+        }
+    }
+
+    /// Assign dictionary keys to Group objects after file loading.
+    pub fn resolve_group_names(&mut self) {
+        let group_dict_handle = self.header.acad_group_dict_handle;
+        let group_names: Vec<(Handle, String)> = match self.objects.get(&group_dict_handle) {
+            Some(ObjectType::Dictionary(dict)) => dict
+                .entries
+                .iter()
+                .map(|(name, handle)| (*handle, name.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
+        for (handle, name) in group_names {
+            if let Some(ObjectType::Group(group)) = self.objects.get_mut(&handle) {
+                group.name = name;
             }
         }
     }
@@ -6432,6 +6779,7 @@ impl CadDocument {
         self.resolve_book_colors();
         self.resolve_xrecord_names();
         self.resolve_table_style_names();
+        self.resolve_group_names();
         self.resolve_xrecord_backed_properties();
         if let Some(s) = self
             .text_styles

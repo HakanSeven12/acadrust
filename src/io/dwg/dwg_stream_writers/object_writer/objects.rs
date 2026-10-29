@@ -674,7 +674,9 @@ impl<'a> DwgObjectWriter<'a> {
         self.writer.write_bit(pattern.has_iteration_limit);
         self.writer.write_bit(pattern.is_single_segment);
         self.writer.write_bit_long(pattern.iteration_limit);
-        self.writer.write_bit_double(pattern.auto_phase);
+        // A BL in DWG (see the reader).
+        self.writer
+            .write_bit_long(pattern.auto_phase.round() as i32);
         self.writer.write_bit_double(pattern.phase);
         let phase_mode = pattern.phase_mode.code();
         self.writer.write_bit((phase_mode & 2) != 0);

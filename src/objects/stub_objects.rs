@@ -1122,6 +1122,109 @@ impl DictionaryWithDefault {
             hard_owner: false,
         }
     }
+
+    /// Get a handle by key (case-insensitive).
+    pub fn get(&self, key: &str) -> Option<Handle> {
+        self.entries
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, h)| *h)
+    }
+
+    /// Get a handle by key, or return the default handle if not found.
+    pub fn get_or_default(&self, key: &str) -> Handle {
+        self.get(key).unwrap_or(self.default_handle)
+    }
+
+    /// Check if the dictionary contains a specific key (case-insensitive).
+    #[inline]
+    pub fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Insert or replace an entry by key (case-insensitive).
+    /// If an entry with this key already exists, its handle is replaced in-place
+    /// and the previous handle is returned.
+    pub fn insert(&mut self, key: impl Into<String>, handle: Handle) -> Option<Handle> {
+        let key_str = key.into();
+        if let Some((_, h)) = self
+            .entries
+            .iter_mut()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&key_str))
+        {
+            let old = *h;
+            *h = handle;
+            Some(old)
+        } else {
+            self.entries.push((key_str, handle));
+            None
+        }
+    }
+
+    /// Alias for [`insert`].
+    #[inline]
+    pub fn set(&mut self, key: impl Into<String>, handle: Handle) -> Option<Handle> {
+        self.insert(key, handle)
+    }
+
+    /// Add an entry to the dictionary.
+    #[inline]
+    pub fn add_entry(&mut self, key: impl Into<String>, handle: Handle) {
+        self.entries.push((key.into(), handle));
+    }
+
+    /// Remove an entry by key (case-insensitive).
+    pub fn remove(&mut self, key: &str) -> Option<Handle> {
+        let pos = self
+            .entries
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))?;
+        Some(self.entries.remove(pos).1)
+    }
+
+    /// Remove an entry by key (case-insensitive) and return both key and handle.
+    pub fn remove_entry(&mut self, key: &str) -> Option<(String, Handle)> {
+        let pos = self
+            .entries
+            .iter()
+            .position(|(k, _)| k.eq_ignore_ascii_case(key))?;
+        Some(self.entries.remove(pos))
+    }
+
+    /// Set the default handle (group code 340).
+    pub fn set_default(&mut self, default_handle: Handle) {
+        self.default_handle = default_handle;
+    }
+
+    /// Get the number of entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the dictionary is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Clear all entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Iterate over (key, handle) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Handle)> + '_ {
+        self.entries.iter().map(|(k, h)| (k.as_str(), *h))
+    }
+
+    /// Iterate over keys.
+    pub fn keys(&self) -> impl Iterator<Item = &str> + '_ {
+        self.entries.iter().map(|(k, _)| k.as_str())
+    }
+
+    /// Iterate over handles.
+    pub fn values(&self) -> impl Iterator<Item = Handle> + '_ {
+        self.entries.iter().map(|(_, h)| *h)
+    }
 }
 
 impl Default for DictionaryWithDefault {
@@ -1183,3 +1286,39 @@ macro_rules! impl_stub_object {
 
 impl_stub_object!(GeoData);
 impl_stub_object!(PlaceHolder);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dictionary_with_default_operations() {
+        let mut dict = DictionaryWithDefault::new();
+        let default_h = Handle::new(0xAA);
+        dict.set_default(default_h);
+        assert_eq!(dict.default_handle, default_h);
+
+        assert!(dict.is_empty());
+        assert_eq!(dict.len(), 0);
+
+        // get_or_default when missing
+        assert_eq!(dict.get("Normal"), None);
+        assert_eq!(dict.get_or_default("Normal"), default_h);
+
+        // insert and case insensitivity
+        assert_eq!(dict.insert("Normal", Handle::new(0xBB)), None);
+        assert_eq!(dict.len(), 1);
+        assert!(dict.contains_key("normal"));
+        assert_eq!(dict.get("NORMAL"), Some(Handle::new(0xBB)));
+        assert_eq!(dict.get_or_default("NORMAL"), Handle::new(0xBB));
+
+        // replacement
+        assert_eq!(dict.insert("NORMAL", Handle::new(0xCC)), Some(Handle::new(0xBB)));
+        assert_eq!(dict.get("normal"), Some(Handle::new(0xCC)));
+
+        // remove
+        assert_eq!(dict.remove("normal"), Some(Handle::new(0xCC)));
+        assert_eq!(dict.get_or_default("Normal"), default_h);
+        assert!(dict.is_empty());
+    }
+}

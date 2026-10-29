@@ -275,3 +275,17 @@ fn ac21_map_sizes_are_checked_before_allocation() {
         }
     }
 }
+
+#[test]
+fn ac21_header_min_compr_len_does_not_overflow() {
+    let bytes = dwg(DxfVersion::AC1021);
+    let mut decoded: Vec<u8> = (0..RS_BLOCKS * RS_DATA)
+        .map(|i| bytes[rs_index(i)])
+        .collect();
+    put_i32(&mut decoded, 0x18, i32::MIN);
+    let mut bad_bytes = bytes.clone();
+    for (i, byte) in decoded.into_iter().enumerate() {
+        bad_bytes[rs_index(i)] = byte;
+    }
+    let _ = DwgReader::from_stream(Cursor::new(bad_bytes)).read();
+}

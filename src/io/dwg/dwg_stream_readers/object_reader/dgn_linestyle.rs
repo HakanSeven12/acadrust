@@ -133,7 +133,9 @@ fn read_stroke_pattern(reader: &mut DwgMergedReader) -> DgnLsStrokePattern {
     let has_iteration_limit = reader.read_bit();
     let is_single_segment = reader.read_bit();
     let iteration_limit = reader.read_bit_long();
-    let auto_phase = reader.read_bit_double();
+    // A BL in DWG, as AutoCAD writes it; read as a BD, a value of 1 left
+    // eight bits to the fields after it.
+    let auto_phase = f64::from(reader.read_bit_long());
     let phase = reader.read_bit_double();
     let phase_mode =
         DgnLsPhaseMode::from_code(((reader.read_bit() as u8) << 1) | reader.read_bit() as u8);

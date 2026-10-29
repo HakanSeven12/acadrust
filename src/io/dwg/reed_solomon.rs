@@ -277,6 +277,9 @@ pub fn reed_solomon_encode(
 /// # Panics
 /// Panics if `buffer.len() < factor * block_size`.
 pub fn reed_solomon_decode(encoded: &[u8], buffer: &mut [u8], factor: usize, block_size: usize) {
+    if factor == 0 || block_size == 0 {
+        return;
+    }
     let mut index = 0;
     let mut n = 0;
     let mut length = buffer.len();
@@ -287,7 +290,7 @@ pub fn reed_solomon_decode(encoded: &[u8], buffer: &mut [u8], factor: usize, blo
             let size = length.min(block_size);
             length -= size;
             let offset = index + size;
-            while index < offset {
+            while index < offset && cindex < encoded.len() {
                 buffer[index] = encoded[cindex];
                 index += 1;
                 cindex += factor;
@@ -399,6 +402,15 @@ mod tests {
         let mut buffer = vec![0u8; 3 * 239];
         reed_solomon_decode(&encoded, &mut buffer, 3, 239);
         assert!(buffer.iter().all(|&b| b == 0xAA));
+    }
+
+    #[test]
+    fn test_reed_solomon_truncated_input_does_not_panic() {
+        let encoded = [1, 2];
+        let mut buffer = [0u8; 10];
+        reed_solomon_decode(&encoded, &mut buffer, 3, 5);
+        assert_eq!(buffer[0], 1);
+        assert_eq!(buffer[1], 2);
     }
 
     // ── GF(2^8) arithmetic tests ─────────────────────────────────────────
