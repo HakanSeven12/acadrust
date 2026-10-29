@@ -1348,6 +1348,15 @@ fn area(e: &EntityType) -> Option<f64> {
             Some(PI * major * major * el.minor_axis_ratio)
         }
         EntityType::Hatch(h) => crate::entities::modification::explode::hatch_area(h),
+        // An open spline, like an open polyline, measures as if closed; the
+        // vector area holds in whatever plane the spline lies.
+        EntityType::Spline(s) => spline_measure(s, |points| {
+            let n = points.len();
+            let twice = (0..n).fold(crate::types::Vector3::ZERO, |sum, i| {
+                sum + points[i].cross(&points[(i + 1) % n])
+            });
+            twice.length() / 2.0
+        }),
         // An open polyline measures as if closed.
         _ => {
             let (vertices, _) = bulge_vertices(e)?;
@@ -1362,6 +1371,35 @@ fn area(e: &EntityType) -> Option<f64> {
             Some(twice.abs() / 2.0)
         }
     }
+}
+
+/// A measure of a spline's curve, taken on points sampled along it at two
+/// densities and extrapolated (Richardson), which cancels the error chords
+/// make along a smooth span. A spline known only by its fit points does not
+/// store its curve and is not measured.
+fn spline_measure(
+    s: &crate::entities::Spline,
+    measure: impl Fn(&[crate::types::Vector3]) -> f64,
+) -> Option<f64> {
+    if s.control_points.len() < 2 {
+        return None;
+    }
+    let degree = usize::try_from(s.degree).unwrap_or(3).max(1);
+    let sampled = |segments| {
+        let mut points = crate::entities::modification::explode::nurbs_points(
+            degree,
+            &s.control_points,
+            &s.weights,
+            &s.knots,
+            segments,
+        );
+        if s.flags.closed && points.first() != points.last() {
+            points.extend(points.first().copied());
+        }
+        measure(&points)
+    };
+    let (coarse, fine) = (sampled(64), sampled(128));
+    Some((4.0 * fine - coarse) / 3.0)
 }
 
 /// The `(x, y, bulge)` vertices of a 2-D polyline and whether it is closed.
@@ -1417,6 +1455,9 @@ fn length(e: &EntityType) -> Option<f64> {
             }
             Some(a.radius * sweep)
         }
+        EntityType::Spline(s) => spline_measure(s, |points| {
+            points.windows(2).map(|w| (w[1] - w[0]).length()).sum()
+        }),
         EntityType::Polyline3D(p) => {
             let mut points: Vec<_> = p.vertices.iter().map(|v| v.position).collect();
             if p.is_closed() {
