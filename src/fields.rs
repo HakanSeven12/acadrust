@@ -366,7 +366,19 @@ fn nested_number(
             return Ok(Num::Real(v));
         }
     }
-    match eval_field(doc, field, ctx, host) {
+    // Child fields form a tree in a sound drawing; a damaged one can link
+    // them in a loop, which must not recurse without end.
+    thread_local! {
+        static NESTING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+    }
+    let depth = NESTING.with(|n| n.get());
+    if depth >= 16 {
+        return Err(ExprError::Unresolved);
+    }
+    NESTING.with(|n| n.set(depth + 1));
+    let text = eval_field(doc, field, ctx, host);
+    NESTING.with(|n| n.set(depth));
+    match text {
         None => Err(ExprError::Unresolved),
         Some(text) => number_in_text(&text)
             .map(Num::Real)
