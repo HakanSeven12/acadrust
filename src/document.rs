@@ -3619,6 +3619,26 @@ impl CadDocument {
         if let EntityType::Insert(insert) = entity {
             return self.explode_insert_with_context(insert);
         }
+        // A dimension draws its block; exploding it gives that block's
+        // contents, as a reference to the block would. Without one the
+        // geometry is rebuilt from the dimension and its style below.
+        if let EntityType::Dimension(dimension) = entity {
+            let base = dimension.base();
+            let has_block = self
+                .block_records
+                .get(&base.block_name)
+                .is_some_and(|record| !record.entity_handles.is_empty());
+            if has_block {
+                let mut insert =
+                    crate::entities::Insert::new(&base.block_name, base.insertion_point);
+                insert.common = base.common.clone();
+                insert.common.handle = Handle::NULL;
+                let parts = self.explode_insert_with_context(&insert);
+                if !parts.is_empty() {
+                    return parts;
+                }
+            }
+        }
         let mut parts = match entity {
             EntityType::MLine(mline) => self.explode_mline_with_context(mline),
             EntityType::MultiLeader(leader) => self.explode_multileader_with_context(leader),
