@@ -210,10 +210,17 @@ fn properties_table_numeric_rows_roundtrip_in_dxf_and_dwg() {
                 code: 294,
                 value: BlockPropertiesTableValue::Boolean(false),
             },
-            // The first column's handle came before its metadata.
             BlockPropertiesTableField {
                 code: 302,
                 value: BlockPropertiesTableValue::Text(String::new()),
+            },
+            BlockPropertiesTableField {
+                code: 340,
+                value: BlockPropertiesTableValue::Handle(Handle::NULL),
+            },
+            BlockPropertiesTableField {
+                code: 340,
+                value: BlockPropertiesTableValue::Handle(Handle::NULL),
             },
             BlockPropertiesTableField {
                 code: 170,
