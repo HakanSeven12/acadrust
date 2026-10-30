@@ -2,6 +2,12 @@
 
 ### Unreleased
 
+- **Custom drawing property fields** - `%<\AcVar CustomDP.<Name>>%`, the code
+  AutoCAD writes for a custom drawing property, resolves to the property's
+  stored text verbatim (name matched case-insensitively). It used to fall
+  through to the system-variable lookup, which reformatted a value such as
+  `12,5` as the point `12.000000, 5.000000, 0.000000`. An empty value shows
+  `----`; a missing property stays unresolved.
 - **Classes of added entities** - Saving as DWG now declares the class of
   every class-registered entity that the source file's class table lacks
   (MULTILEADER, WIPEOUT, ACAD_TABLE, IMAGE, ARC_DIMENSION, ...), as it already
