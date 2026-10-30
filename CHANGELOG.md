@@ -131,8 +131,12 @@
   treated as a material tail. An R2007 solid-history region accepts a profile
   stored as a body. AcDs wireframe stubs write the silhouette count even when
   the isoline cache is absent (issue #170).
-- **Associative arcs** - An edge arc carries three points and four scalars in
-  every version. A shorter terminal record is not accepted as a decoded arc.
+- **Associative arcs** - An edge arc carries three points and four scalars,
+  except a terminal AC1024 arc, which AutoCAD writes with three (radius, start
+  and end angle) and whose main stream ends exactly after the third. That
+  record is decoded with three scalars and written back as it was read. Any
+  other shorter record (AC1027 and later, a nested arc, bits left after the
+  third scalar, or fewer than three scalars) is not accepted as a decoded arc.
 - **Block Properties Tables** - Numeric rows and ordered DXF fields
   round-trip. Each column stores two parameter handles, in DXF field order.
   Unsupported value types are rejected instead of dropping the table.

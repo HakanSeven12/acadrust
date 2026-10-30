@@ -21,7 +21,20 @@ fn read_edge_curve(
                 out.push(point(reader));
             }
             let scalar_count = if curve_type == 11 { 4 } else { 5 };
-            for _ in 0..scalar_count {
+            for index in 0..scalar_count {
+                // AutoCAD writes a terminal AC1024 edge arc without the
+                // fourth scalar; AC1027 and later add it. Never infer a
+                // missing value in nested curves, other versions, or a
+                // partially read scalar.
+                if curve_type == 11
+                    && index == 3
+                    && depth == 0
+                    && reader.dxf_version() == DxfVersion::AC1024
+                    && !reader.has_error()
+                    && reader.main_remaining_bits() == 0
+                {
+                    break;
+                }
                 out.push(real(reader));
             }
         }
