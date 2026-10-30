@@ -89,3 +89,93 @@ fn inline_operands_are_stored_as_child_fields() {
         );
     }
 }
+
+#[test]
+fn a_stored_formula_reads_back_with_its_operands_inline() {
+    let mut doc = CadDocument::new();
+    let circle = |r: f64| EntityType::Circle(Circle::from_center_radius(Vector3::ZERO, r));
+    let small = doc.add_entity(circle(1.0)).unwrap();
+    let large = doc.add_entity(circle(2.0)).unwrap();
+    let host = doc
+        .add_entity(EntityType::MText(Box::new(MText::new())))
+        .unwrap();
+    // An operand that is itself a formula over a field, and an object the
+    // formula names itself, both survive the round trip.
+    let code = "\\AcExpr (%<\\AcExpr (%<\\AcObjProp Object(%<\\_ObjIdx 1>%).Area>%*2)>%+%<\\AcObjProp Object(%<\\_ObjIdx 0>%).Area>%) \\f \"%lu2%pr2\"";
+    let mut sum = NewField::new(code, "");
+    sum.objects = vec![small, large];
+    let container = doc
+        .set_text_field(host, "%<\\_FldIdx 0>%", vec![sum])
+        .unwrap();
+
+    let stored = formula(&doc, container);
+    assert_eq!(
+        stored.code,
+        "\\AcExpr (%<\\_FldIdx 0>%+%<\\_FldIdx 1>%) \\f \"%lu2%pr2\""
+    );
+    assert_eq!(
+        children(&doc, children(&doc, stored.handle)[0].handle)[0].objects,
+        [large]
+    );
+    assert_eq!(
+        fields::inline_code(&doc, stored.handle),
+        Some((
+            "\\AcExpr (%<\\AcExpr (%<\\AcObjProp Object(%<\\_ObjIdx 0>%).Area>%*2)>%+%<\\AcObjProp Object(%<\\_ObjIdx 1>%).Area>%) \\f \"%lu2%pr2\"".to_string(),
+            vec![large, small],
+        ))
+    );
+    assert_eq!(
+        fields::resolve(&doc, host, &Context).as_deref(),
+        Some(format!("{:.2}", 9.0 * PI).as_str())
+    );
+}
+
+#[test]
+fn a_block_attribute_formula_is_copied_with_its_operands() {
+    use acadrust::entities::{AttributeDefinition, AttributeEntity, Insert};
+    use acadrust::tables::BlockRecord;
+    let mut doc = CadDocument::new();
+    let circle = |r: f64| EntityType::Circle(Circle::from_center_radius(Vector3::ZERO, r));
+    let small = doc.add_entity(circle(1.0)).unwrap();
+    let large = doc.add_entity(circle(2.0)).unwrap();
+    let mut block = BlockRecord::new("ROOM");
+    block.handle = doc.allocate_handle();
+    let owner = block.handle;
+    doc.block_records.add(block).unwrap();
+    let mut def = AttributeDefinition::new("AREA".into(), "Area".into(), String::new());
+    def.common.owner_handle = owner;
+    let def = doc
+        .add_entity(EntityType::AttributeDefinition(def))
+        .unwrap();
+    let mut sum = NewField::new(
+        "\\AcExpr (%<\\AcObjProp Object(%<\\_ObjIdx 0>%).Area>%+%<\\AcObjProp Object(%<\\_ObjIdx 1>%).Area>%) \\f \"%lu2%pr2\"",
+        "15.71",
+    );
+    sum.objects = vec![small, large];
+    doc.set_text_field(def, "%<\\_FldIdx 0>%", vec![sum])
+        .unwrap();
+
+    let mut room = Insert::new("ROOM", Vector3::ZERO);
+    room.attributes
+        .push(AttributeEntity::new("AREA".into(), String::new()));
+    let room = doc.add_entity(EntityType::Insert(room)).unwrap();
+    doc.attach_attribute_fields(room, &Context);
+
+    let Some(EntityType::Insert(room)) = doc.get_entity(room) else {
+        panic!("the block reference stays");
+    };
+    let attribute = room.attributes[0].common.handle;
+    assert_eq!(
+        fields::resolve(&doc, attribute, &Context).as_deref(),
+        Some(format!("{:.2}", 5.0 * PI).as_str())
+    );
+    let copies: Vec<&FieldDef> = doc
+        .fields
+        .values()
+        .filter(|f| f.evaluator == "AcExpr")
+        .collect();
+    assert_eq!(copies.len(), 2, "the definition's formula and its copy");
+    for copy in copies {
+        assert_stored_as_operands(&doc, copy.owner, small, large);
+    }
+}
