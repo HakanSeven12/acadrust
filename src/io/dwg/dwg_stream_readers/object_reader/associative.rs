@@ -1208,7 +1208,8 @@ pub fn read_associative_data(
             let single_dependency = read_single_dependency(reader, version, dxf_version);
             let parameter = handle(reader);
             let has_action = reader.read_bit();
-            let action_type = reader.read_bit_long();
+            // A detached edge stores no cached curve after the flag.
+            let action_type = if has_action { reader.read_bit_long() } else { 0 };
             let subcurve_kind = match action_type {
                 11 => AssocSubcurveKind::Arc,
                 17 => AssocSubcurveKind::Ellipse,
@@ -1219,7 +1220,9 @@ pub fn read_associative_data(
                 _ => AssocSubcurveKind::None,
             };
             let mut curve = Vec::new();
-            read_edge_curve(reader, action_type, &mut curve, 0);
+            if has_action {
+                read_edge_curve(reader, action_type, &mut curve, 0);
+            }
             AssociativeData::EdgeActionParam(AssocEdgeActionParam {
                 single_dependency,
                 parameter,
